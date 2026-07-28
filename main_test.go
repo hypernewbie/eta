@@ -7,6 +7,17 @@ import (
 	"testing"
 )
 
+func TestMediaTypes(t *testing.T) {
+	for name, want := range map[string]string{
+		"song.mp3": "audio/mpeg", "song.ogg": "audio/ogg", "song.wav": "audio/wav",
+		"movie.mp4": "video/mp4", "movie.webm": "video/webm",
+	} {
+		if got := mediaType(name); got != want {
+			t.Errorf("mediaType(%q) = %q, want %q", name, got, want)
+		}
+	}
+}
+
 func TestTargetStaysWithinConfiguredRoot(t *testing.T) {
 	rootPath := t.TempDir()
 	outsidePath := t.TempDir()

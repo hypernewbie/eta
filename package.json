@@ -1,0 +1,13 @@
+{
+  "name": "eta-web",
+  "private": true,
+  "scripts": {
+    "build:web": "tsc --project tsconfig.json",
+    "check:web": "tsc --noEmit --project tsconfig.json",
+    "format:web": "prettier --write web/app.ts web/style.css web/index.html"
+  },
+  "devDependencies": {
+    "prettier": "3.5.3",
+    "typescript": "5.7.3"
+  }
+}

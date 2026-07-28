@@ -1,0 +1,14 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["DOM", "DOM.Iterable", "ES2022"],
+    "module": "None",
+    "rootDir": "./web",
+    "outDir": "./web/generated",
+    "strict": false,
+    "noImplicitAny": false,
+    "noEmitOnError": true,
+    "skipLibCheck": true
+  },
+  "include": ["web/app.ts"]
+}

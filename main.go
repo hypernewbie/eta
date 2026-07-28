@@ -270,6 +270,9 @@ func (s *server) handleFile(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Query().Get("download") == "1" {
 		w.Header().Set("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": info.Name()}))
 	}
+	if contentType := mediaType(info.Name()); contentType != "" {
+		w.Header().Set("Content-Type", contentType)
+	}
 	http.ServeContent(w, r, info.Name(), info.ModTime(), file)
 }
 
@@ -294,6 +297,34 @@ func (s *server) target(r *http.Request) (int, string, string, error) {
 		return 0, "", "", errors.New("path resolves outside the selected root")
 	}
 	return rootID, resolved, filepath.ToSlash(relative), nil
+}
+
+func mediaType(name string) string {
+	// Go's extension table can be platform dependent. These ensure browser
+	// media controls receive the expected type on a minimal NAS install.
+	switch strings.ToLower(filepath.Ext(name)) {
+	case ".mp3":
+		return "audio/mpeg"
+	case ".ogg", ".oga":
+		return "audio/ogg"
+	case ".opus":
+		return "audio/ogg; codecs=opus"
+	case ".wav":
+		return "audio/wav"
+	case ".flac":
+		return "audio/flac"
+	case ".m4a":
+		return "audio/mp4"
+	case ".mp4":
+		return "video/mp4"
+	case ".webm":
+		return "video/webm"
+	case ".ogv":
+		return "video/ogg"
+	case ".m4v":
+		return "video/x-m4v"
+	}
+	return mime.TypeByExtension(strings.ToLower(filepath.Ext(name)))
 }
 
 func makeEntry(name, path string, info fs.FileInfo) entry {
