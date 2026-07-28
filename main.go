@@ -44,8 +44,9 @@ type root struct {
 }
 
 type server struct {
-	roots []root
-	web   fs.FS
+	roots  []root
+	web    fs.FS
+	thumbs *thumbnailCache
 }
 
 type entry struct {
@@ -60,6 +61,8 @@ func main() {
 	var roots rootsFlag
 	port := flag.Int("port", 7080, "HTTP port")
 	ip := flag.String("ip", "lan", `bind address; "lan" matches Phi: loopback + private LAN + Tailnet`)
+	thumbnailCacheDir := flag.String("thumbnail-cache-dir", "", "directory for generated image thumbnails (default: user cache directory)")
+	thumbnailCacheSize := flag.String("thumbnail-cache-size", "2GB", "maximum thumbnail cache size (for example: 512MB, 2GB)")
 	flag.Var(&roots, "root", "directory to expose (repeatable; defaults to the current directory)")
 	flag.Parse()
 
@@ -72,6 +75,21 @@ func main() {
 	}
 
 	s, err := newServer(roots)
+	if err != nil {
+		log.Fatal(err)
+	}
+	cacheDir := *thumbnailCacheDir
+	if cacheDir == "" {
+		cacheDir, err = defaultThumbnailCacheDir()
+		if err != nil {
+			log.Fatal(err)
+		}
+	}
+	cacheBytes, err := parseCacheBytes(*thumbnailCacheSize)
+	if err != nil {
+		log.Fatal(err)
+	}
+	s.thumbs, err = newThumbnailCache(cacheDir, cacheBytes)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -152,6 +170,7 @@ func (s *server) routes() http.Handler {
 	mux.HandleFunc("GET /api/roots", s.handleRoots)
 	mux.HandleFunc("GET /api/list", s.handleList)
 	mux.HandleFunc("GET /api/preview", s.handlePreview)
+	mux.HandleFunc("GET /api/thumbnail", s.handleThumbnail)
 	mux.HandleFunc("GET /api/file", s.handleFile)
 	mux.Handle("/", http.FileServer(http.FS(s.web)))
 	return securityHeaders(mux)
@@ -248,6 +267,54 @@ func (s *server) handlePreview(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"text": string(contents), "truncated": truncated, "binary": false})
+}
+
+func (s *server) handleThumbnail(w http.ResponseWriter, r *http.Request) {
+	if s.thumbs == nil {
+		writeError(w, errors.New("thumbnail cache is unavailable"))
+		return
+	}
+	_, target, _, err := s.target(r)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	info, err := os.Stat(target)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	edge, err := thumbnailSize(r.URL.Query().Get("size"))
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	thumbnail, err := s.thumbs.get(target, info, edge)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	etag := `"` + thumbnail.etag + `"`
+	w.Header().Set("Cache-Control", "private, max-age=600")
+	w.Header().Set("ETag", etag)
+	if r.Header.Get("If-None-Match") == etag {
+		w.WriteHeader(http.StatusNotModified)
+		return
+	}
+	file, err := os.Open(thumbnail.path)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	defer file.Close()
+	cachedInfo, err := file.Stat()
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	w.Header().Set("Content-Type", thumbnail.contentType)
+	w.Header().Set("Content-Length", strconv.FormatInt(cachedInfo.Size(), 10))
+	http.ServeContent(w, r, filepath.Base(thumbnail.path), cachedInfo.ModTime(), file)
 }
 
 func (s *server) handleFile(w http.ResponseWriter, r *http.Request) {
@@ -352,10 +419,13 @@ func writeJSON(w http.ResponseWriter, status int, value any) {
 
 func writeError(w http.ResponseWriter, err error) {
 	status := http.StatusInternalServerError
-	if errors.Is(err, fs.ErrNotExist) {
+	var apiErr *apiError
+	switch {
+	case errors.As(err, &apiErr):
+		status = apiErr.status
+	case errors.Is(err, fs.ErrNotExist):
 		status = http.StatusNotFound
-	}
-	if strings.Contains(err.Error(), "root") || strings.Contains(err.Error(), "regular") || strings.Contains(err.Error(), "preview") {
+	case strings.Contains(err.Error(), "root") || strings.Contains(err.Error(), "regular") || strings.Contains(err.Error(), "preview"):
 		status = http.StatusBadRequest
 	}
 	writeJSON(w, status, map[string]string{"error": err.Error()})

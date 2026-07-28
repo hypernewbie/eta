@@ -139,6 +139,7 @@ const state = {
     path: "",
     selected: null,
     rawText: "",
+    view: localStorage.getItem("eta_directory_view") === "grid" ? "grid" : "list",
 };
 const $ = (selector) => {
     const element = document.querySelector(selector);
@@ -157,6 +158,7 @@ const imageExtensions = new Set([
     "svg",
     "webp",
 ]);
+const thumbnailExtensions = new Set(["gif", "jpeg", "jpg", "png"]);
 const audioExtensions = new Set([
     "aac",
     "flac",
@@ -253,6 +255,9 @@ function fileURL(path, download = false) {
 function previewURL(path) {
     return `/api/preview?${new URLSearchParams({ root: String(state.root), path })}`;
 }
+function thumbnailURL(path, edge = 320) {
+    return `/api/thumbnail?${new URLSearchParams({ root: String(state.root), path, size: String(edge) })}`;
+}
 function extension(name) {
     return name.includes(".")
         ? name.split(".").pop().toLowerCase()
@@ -302,10 +307,19 @@ function entryMarkup(entry) {
     const icon = entry.kind === "directory" ? "folder" : "file";
     return `<button class="entry ${entry.kind}" data-path="${escapeHTML(entry.path)}" data-kind="${entry.kind}" data-size="${entry.size}" data-modified="${entry.modified}"><span class="entry-name-col"><i class="entry-icon" data-lucide="${icon}"></i><span class="entry-name">${escapeHTML(entry.name)}</span></span><span class="entry-meta">${date(entry.modified)}</span><span class="entry-meta">${entry.kind === "directory" ? "—" : bytes(entry.size)}</span></button>`;
 }
+function gridEntryMarkup(entry) {
+    const image = entry.kind === "file" && thumbnailExtensions.has(extension(entry.name));
+    const visual = image
+        ? `<img class="thumbnail" loading="lazy" decoding="async" src="${thumbnailURL(entry.path)}" alt="">`
+        : `<span class="grid-icon"><i data-lucide="${entry.kind === "directory" ? "folder" : "file"}"></i></span>`;
+    return `<button class="entry grid-entry ${entry.kind}" data-path="${escapeHTML(entry.path)}" data-kind="${entry.kind}" data-size="${entry.size}" data-modified="${entry.modified}">${visual}<span class="grid-name">${escapeHTML(entry.name)}</span><span class="grid-meta">${entry.kind === "directory" ? "Folder" : bytes(entry.size)}</span></button>`;
+}
 function renderEntries(entries) {
     $("#item-count").textContent =
         `${entries.length} ${entries.length === 1 ? "item" : "items"}`;
     const container = $("#entries");
+    $("#file-table").classList.toggle("grid-view", state.view === "grid");
+    container.classList.toggle("image-grid", state.view === "grid");
     const parent = state.path
         ? '<button class="entry parent" data-parent="true"><span class="entry-name-col"><i class="entry-icon" data-lucide="corner-left-up"></i><span class="entry-name">..</span></span><span class="entry-meta">Parent folder</span><span class="entry-meta">—</span></button>'
         : "";
@@ -314,7 +328,8 @@ function renderEntries(entries) {
         iconify();
         return;
     }
-    container.innerHTML = parent + entries.map(entryMarkup).join("");
+    const renderer = state.view === "grid" ? gridEntryMarkup : entryMarkup;
+    container.innerHTML = parent + entries.map(renderer).join("");
     iconify();
 }
 async function navigate(path = "") {
@@ -419,6 +434,8 @@ async function copyText() {
 }
 async function boot() {
     setTheme(localStorage.getItem("eta_theme_color") || "purple");
+    $("#view-toggle").title =
+        state.view === "grid" ? "Use detailed list" : "Use image grid";
     try {
         state.roots = await api("/api/roots");
         $("#root-select").innerHTML = state.roots
@@ -437,6 +454,13 @@ $("#root-select").addEventListener("change", (event) => {
     navigate();
 });
 $("#refresh-button").addEventListener("click", () => navigate(state.path));
+$("#view-toggle").addEventListener("click", () => {
+    state.view = state.view === "list" ? "grid" : "list";
+    localStorage.setItem("eta_directory_view", state.view);
+    $("#view-toggle").title =
+        state.view === "grid" ? "Use detailed list" : "Use image grid";
+    navigate(state.path);
+});
 $("#up-button").addEventListener("click", () => navigate(parentPath()));
 $("#breadcrumbs").addEventListener("click", (event) => {
     const button = event.target.closest("[data-path]");
@@ -453,7 +477,7 @@ $("#entries").addEventListener("click", (event) => {
     }
     const item = {
         path: row.dataset.path,
-        name: row.querySelector(".entry-name").textContent,
+        name: row.querySelector(".entry-name, .grid-name")?.textContent || "",
         kind: row.dataset.kind,
         size: Number(row.dataset.size),
         modified: row.dataset.modified,
