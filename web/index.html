@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="color-scheme" content="dark">
+  <title>η eta — Archive</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&family=Marcellus&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@shoelace-style/shoelace@2.20.1/cdn/themes/dark.css">
+  <link rel="stylesheet" href="style.css">
+  <script type="module" src="https://cdn.jsdelivr.net/npm/@shoelace-style/shoelace@2.20.1/cdn/shoelace-autoloader.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/lucide@0.468.0/dist/umd/lucide.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/dayjs@1.11.13/dayjs.min.js"></script>
+</head>
+<body class="sl-theme-dark">
+  <main class="app-shell">
+    <header class="app-header">
+      <a class="brand" href="/" aria-label="eta home"><span class="sigil">η</span><span class="wordmark">eta</span><span class="subtitle">ARCHIVE</span></a>
+      <div class="header-status"><span class="pulse"></span><span>READ ONLY</span><span class="divider">·</span><span id="server-status">CONNECTED</span></div>
+      <button class="icon-button" id="theme-button" title="Change highlight color"><i data-lucide="palette"></i></button>
+    </header>
+
+    <section class="hero">
+      <div class="hero-mark">𓂀</div>
+      <div><p class="eyebrow">TAILNET ARCHIVE</p><h1>Your filesystem, held in glass.</h1><p class="hero-copy">A read-only view over the roots this eta server was given.</p></div>
+      <div class="hero-constellation" aria-hidden="true"><span></span><span></span><span></span></div>
+    </section>
+
+    <section class="browser-panel" aria-label="Filesystem browser">
+      <div class="toolbar">
+        <label class="root-picker"><i data-lucide="hard-drive"></i><select id="root-select" aria-label="Filesystem root"></select><i data-lucide="chevron-down" class="chevron"></i></label>
+        <nav class="breadcrumbs" id="breadcrumbs" aria-label="Breadcrumb"></nav>
+        <div class="toolbar-actions"><button class="icon-button" id="up-button" title="Up one folder"><i data-lucide="arrow-up"></i></button><button class="icon-button" id="refresh-button" title="Refresh"><i data-lucide="refresh-cw"></i></button></div>
+      </div>
+      <div class="file-table" id="file-table">
+        <div class="table-head"><span>Name</span><span>Modified</span><span>Size</span></div>
+        <div id="entries" class="entries" aria-live="polite"></div>
+      </div>
+      <footer class="panel-footer"><span id="item-count">—</span><span>η / filesystem observer</span></footer>
+    </section>
+  </main>
+
+  <sl-dialog id="preview-dialog" label="File preview" class="preview-dialog"><div id="preview-content"></div><div slot="footer"><sl-button id="download-button" variant="primary"><i data-lucide="download"></i> Download</sl-button><sl-button id="close-dialog">Close</sl-button></div></sl-dialog>
+  <sl-dialog id="theme-dialog" label="Choose a highlight color" class="theme-dialog"><div class="swatches" id="swatches"></div></sl-dialog>
+  <sl-alert id="error-toast" variant="danger" duration="5000" closable><i slot="icon" data-lucide="circle-alert"></i><span id="error-message"></span></sl-alert>
+  <script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,17 @@
+# Local working notes, runtime state, and server logs
+temp/
+
+# Go build and test artifacts
+/eta
+*.test
+*.out
+*.prof
+coverage.txt
+
+# Local editor and OS metadata
+.DS_Store
+.idea/
+.vscode/
+
+# Optional frontend tooling output
+node_modules/
