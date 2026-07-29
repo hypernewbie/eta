@@ -17,6 +17,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -24,9 +25,11 @@ import (
 	"time"
 
 	"github.com/hypernewbie/eta/internal/bindaddr"
+	"github.com/hypernewbie/eta/internal/diskcache"
 	"github.com/hypernewbie/eta/internal/fileops"
 	"github.com/hypernewbie/eta/internal/hostid"
 	"github.com/hypernewbie/eta/internal/peers"
+	"github.com/hypernewbie/eta/internal/remotefile"
 	"github.com/hypernewbie/eta/internal/uistate"
 )
 
@@ -49,12 +52,13 @@ type root struct {
 }
 
 type server struct {
-	roots    []root
-	web      fs.FS
-	thumbs   *thumbnailCache
-	identity hostid.Identity
-	state    *uistate.Store
-	peers    *peers.Store
+	roots       []root
+	web         fs.FS
+	thumbs      *thumbnailCache
+	identity    hostid.Identity
+	state       *uistate.Store
+	peers       *peers.Store
+	remoteCache *diskcache.Cache
 }
 
 type entry struct {
@@ -75,6 +79,8 @@ func main() {
 	accent := flag.String("accent", "", "host accent override (one of Eta's Phi accent names)")
 	stateFile := flag.String("state-file", "", "persistent UI state file (default: user config directory)")
 	peersFile := flag.String("peers-file", "", "explicit coordinator peer inventory file (default: user config directory)")
+	remoteCacheDir := flag.String("remote-cache-dir", "", "directory for cached remote byte ranges (default: user cache directory)")
+	remoteCacheSize := flag.String("remote-cache-size", "4GB", "maximum remote byte-range cache size")
 	flag.Var(&roots, "root", "directory to expose (repeatable; defaults to the current directory)")
 	flag.Parse()
 
@@ -124,6 +130,21 @@ func main() {
 		}
 	}
 	s.peers = peers.New(peerPath)
+	remoteDir := *remoteCacheDir
+	if remoteDir == "" {
+		remoteDir, err = diskcache.DefaultPath()
+		if err != nil {
+			log.Fatal(err)
+		}
+	}
+	remoteBytes, err := parseCacheBytes(*remoteCacheSize)
+	if err != nil {
+		log.Fatal(err)
+	}
+	s.remoteCache, err = diskcache.New(remoteDir, remoteBytes)
+	if err != nil {
+		log.Fatal(err)
+	}
 	cacheDir := *thumbnailCacheDir
 	if cacheDir == "" {
 		cacheDir, err = defaultThumbnailCacheDir()
@@ -300,6 +321,11 @@ func (s *server) proxyPeer(w http.ResponseWriter, r *http.Request, route string)
 		writeError(w, errors.New("unknown peer"))
 		return
 	}
+	if route == "/api/file" && s.remoteCache != nil && r.Header.Get("Range") != "" {
+		if s.proxyCachedPeerRange(w, r, peer) {
+			return
+		}
+	}
 	remoteURL, err := url.Parse(peer.URL)
 	if err != nil {
 		writeError(w, err)
@@ -340,6 +366,47 @@ func (s *server) proxyPeer(w http.ResponseWriter, r *http.Request, route string)
 	}
 	w.WriteHeader(response.StatusCode)
 	_, _ = io.Copy(w, response.Body)
+}
+
+const maxCachedRemoteRange = 8 << 20
+
+// proxyCachedPeerRange handles a single explicit byte range. Unsupported or
+// oversized ranges return false and deliberately fall through to streaming.
+func (s *server) proxyCachedPeerRange(w http.ResponseWriter, r *http.Request, peer peers.Peer) bool {
+	match := regexp.MustCompile(`^bytes=(\d+)-(\d+)$`).FindStringSubmatch(r.Header.Get("Range"))
+	if match == nil {
+		return false
+	}
+	start, err := strconv.ParseInt(match[1], 10, 64)
+	if err != nil {
+		return false
+	}
+	end, err := strconv.ParseInt(match[2], 10, 64)
+	if err != nil || end < start || end-start+1 > maxCachedRemoteRange {
+		return false
+	}
+	rootID, err := strconv.Atoi(r.URL.Query().Get("root"))
+	if err != nil {
+		writeError(w, errors.New("invalid root"))
+		return true
+	}
+	source := &remotefile.HTTPSource{BaseURL: peer.URL, Root: rootID, Client: &http.Client{Timeout: 30 * time.Second}}
+	body, info, err := remotefile.ReadCachedRange(r.Context(), s.remoteCache, source, r.URL.Query().Get("path"), start, end-start+1)
+	if err != nil {
+		writeError(w, err)
+		return true
+	}
+	if len(body) == 0 && info.Size > 0 {
+		writeError(w, errors.New("empty remote range"))
+		return true
+	}
+	last := start + int64(len(body)) - 1
+	w.Header().Set("Accept-Ranges", "bytes")
+	w.Header().Set("Content-Length", strconv.FormatInt(int64(len(body)), 10))
+	w.Header().Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", start, last, info.Size))
+	w.WriteHeader(http.StatusPartialContent)
+	_, _ = w.Write(body)
+	return true
 }
 
 func (s *server) handlePeers(w http.ResponseWriter, _ *http.Request) {

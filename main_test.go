@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/hypernewbie/eta/internal/diskcache"
 	"github.com/hypernewbie/eta/internal/peers"
 	"github.com/hypernewbie/eta/internal/uistate"
 )
@@ -22,6 +23,48 @@ func TestMediaTypes(t *testing.T) {
 		if got := mediaType(name); got != want {
 			t.Errorf("mediaType(%q) = %q, want %q", name, got, want)
 		}
+	}
+}
+
+func TestRemoteFileRangeProxyCachesPeerRead(t *testing.T) {
+	var fileReads int
+	peerServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/list":
+			_, _ = w.Write([]byte(`{"entry":{"kind":"file","size":6,"modified":"2025-01-01T00:00:00Z"}}`))
+		case "/api/file":
+			fileReads++
+			w.Header().Set("Content-Range", "bytes 2-4/6")
+			w.WriteHeader(http.StatusPartialContent)
+			_, _ = w.Write([]byte("cde"))
+		default:
+			t.Fatalf("path = %s", r.URL.Path)
+		}
+	}))
+	defer peerServer.Close()
+	s, err := newServer([]string{t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.peers = peers.New(filepath.Join(t.TempDir(), "peers.json"))
+	if err := s.peers.Add(peers.Peer{URL: peerServer.URL}); err != nil {
+		t.Fatal(err)
+	}
+	s.remoteCache, err = diskcache.New(t.TempDir(), 1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		request := httptest.NewRequest("GET", "/api/remote/file?peer="+url.QueryEscape(peerServer.URL)+"&root=0&path=x", nil)
+		request.Header.Set("Range", "bytes=2-4")
+		response := httptest.NewRecorder()
+		s.routes().ServeHTTP(response, request)
+		if response.Code != http.StatusPartialContent || response.Body.String() != "cde" {
+			t.Fatalf("status=%d body=%q", response.Code, response.Body.String())
+		}
+	}
+	if fileReads != 1 {
+		t.Fatalf("peer file reads = %d", fileReads)
 	}
 }
 
