@@ -2,12 +2,14 @@ package main
 
 import (
 	"encoding/json"
+	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/hypernewbie/eta/internal/peers"
 	"github.com/hypernewbie/eta/internal/uistate"
 )
 
@@ -19,6 +21,31 @@ func TestMediaTypes(t *testing.T) {
 		if got := mediaType(name); got != want {
 			t.Errorf("mediaType(%q) = %q, want %q", name, got, want)
 		}
+	}
+}
+
+func TestPeerEnrollmentProbesIdentity(t *testing.T) {
+	peerServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/identity" {
+			t.Fatalf("path = %s", r.URL.Path)
+		}
+		_, _ = w.Write([]byte(`{"id":"peer-id","hostname":"peer","accent":"blue","glyph":"𓀀"}`))
+	}))
+	defer peerServer.Close()
+	s, err := newServer([]string{t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.peers = peers.New(filepath.Join(t.TempDir(), "peers.json"))
+	req := httptest.NewRequest("POST", "/api/peers", strings.NewReader(`{"url":"`+peerServer.URL+`"}`))
+	response := httptest.NewRecorder()
+	s.routes().ServeHTTP(response, req)
+	if response.Code != http.StatusCreated {
+		t.Fatalf("status = %d", response.Code)
+	}
+	items, err := s.peers.List()
+	if err != nil || len(items) != 1 || items[0].Name != "peer" {
+		t.Fatalf("peers = %#v err=%v", items, err)
 	}
 }
 
