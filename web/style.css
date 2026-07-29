@@ -291,6 +291,10 @@ button {
   height: 18px;
   color: var(--text-muted);
 }
+iconify-icon.entry-icon {
+  display: block;
+  flex: 0 0 18px;
+}
 .entry.directory .entry-icon,
 .entry.parent .entry-icon {
   color: var(--accent);

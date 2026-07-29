@@ -449,9 +449,32 @@ function renderBreadcrumbs(view) {
         .map((crumb, index) => `${index ? '<i class="crumb-separator" data-lucide="chevron-right"></i>' : ""}<button class="breadcrumb" data-path="${escapeHTML(crumb.path)}">${escapeHTML(crumb.name)}</button>`)
         .join("");
 }
+function fileIcon(entry) {
+    if (entry.kind === "directory")
+        return '<i class="entry-icon" data-lucide="folder"></i>';
+    const icons = {
+        go: "vscode-icons:file-type-go",
+        js: "vscode-icons:file-type-js",
+        ts: "vscode-icons:file-type-typescript",
+        py: "vscode-icons:file-type-python",
+        rs: "vscode-icons:file-type-rust",
+        md: "vscode-icons:file-type-markdown",
+        json: "vscode-icons:file-type-json",
+        html: "vscode-icons:file-type-html",
+        css: "vscode-icons:file-type-css",
+        pdf: "vscode-icons:file-type-pdf2",
+        jpg: "vscode-icons:file-type-image",
+        png: "vscode-icons:file-type-image",
+        mp3: "vscode-icons:file-type-audio",
+        mp4: "vscode-icons:file-type-video",
+    };
+    const icon = icons[extension(entry.name)];
+    return icon
+        ? `<iconify-icon class="entry-icon file-type-icon" icon="${icon}"></iconify-icon>`
+        : '<i class="entry-icon" data-lucide="file"></i>';
+}
 function entryMarkup(entry) {
-    const icon = entry.kind === "directory" ? "folder" : "file";
-    return `<button class="entry ${entry.kind}" data-path="${escapeHTML(entry.path)}" data-kind="${entry.kind}" data-size="${entry.size}" data-modified="${entry.modified}"><span class="entry-name-col"><i class="entry-icon" data-lucide="${icon}"></i><span class="entry-name">${escapeHTML(entry.name)}</span></span><span class="entry-meta">${date(entry.modified)}</span><span class="entry-meta">${entry.kind === "directory" ? "—" : bytes(entry.size)}</span></button>`;
+    return `<button class="entry ${entry.kind}" data-path="${escapeHTML(entry.path)}" data-kind="${entry.kind}" data-size="${entry.size}" data-modified="${entry.modified}"><span class="entry-name-col">${fileIcon(entry)}<span class="entry-name">${escapeHTML(entry.name)}</span></span><span class="entry-meta">${date(entry.modified)}</span><span class="entry-meta">${entry.kind === "directory" ? "—" : bytes(entry.size)}</span></button>`;
 }
 function gridEntryMarkup(view, entry) {
     const image = entry.kind === "file" && thumbnailExtensions.has(extension(entry.name));
