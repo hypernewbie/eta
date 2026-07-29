@@ -322,6 +322,8 @@ function showToast(message, variant = "danger") {
     alert.toast();
 }
 const desktopWindows = new Map();
+const explorerViews = new Map();
+let restoringDesktop = false;
 let stateSaveTimer;
 function capturedDesktopState() {
     return [...desktopWindows.values()].map((item) => ({
@@ -350,7 +352,7 @@ async function saveDesktopState() {
     }
 }
 function scheduleDesktopSave() {
-    if (!desktopEnabled())
+    if (!desktopEnabled() || restoringDesktop)
         return;
     if (stateSaveTimer)
         window.clearTimeout(stateSaveTimer);
@@ -381,7 +383,7 @@ function createExplorerPanel() {
     $("#explorer-backstore").append(panel);
     return panel;
 }
-async function openExplorerWindow() {
+async function openExplorerWindow(restored) {
     if (!window.WinBox || window.innerWidth < 700)
         return;
     document.body.classList.add("windowed");
@@ -398,13 +400,18 @@ async function openExplorerWindow() {
         title,
         mount: panel,
         class: "eta-window",
-        x: "center",
-        y: 64,
-        width: Math.min(1240, Math.max(640, Math.floor(window.innerWidth * 0.86))),
-        height: Math.min(820, Math.max(420, Math.floor(window.innerHeight * 0.76))),
+        x: restored ? restored.x : "center",
+        y: restored?.y ?? 64,
+        width: restored?.width ??
+            Math.min(1240, Math.max(640, Math.floor(window.innerWidth * 0.86))),
+        height: restored?.height ??
+            Math.min(820, Math.max(420, Math.floor(window.innerHeight * 0.76))),
         bottom: 40,
+        max: restored?.maximized,
+        min: restored?.minimized,
         onclose: () => {
             desktopWindows.delete(key);
+            explorerViews.delete(key);
             windowChanged();
             queueMicrotask(() => panel.remove());
         },
@@ -424,9 +431,10 @@ async function openExplorerWindow() {
             path: view.state.path,
         }),
     });
+    explorerViews.set(key, view);
     refreshTaskStrip();
     scheduleDesktopSave();
-    await initializeExplorer(view);
+    await initializeExplorer(view, restored);
 }
 function renderBreadcrumbs(view) {
     const root = view.state.roots[view.state.root];
@@ -558,7 +566,7 @@ async function renderPreview(view, entry, container) {
     }
     return { rawText, binary };
 }
-async function openInspector(view, entry) {
+async function openInspector(view, entry, restored) {
     const WinBox = window.WinBox;
     if (!WinBox)
         return;
@@ -584,11 +592,13 @@ async function openInspector(view, entry) {
         title: hostWindowTitle(entry.name),
         mount: panel,
         class: "eta-window",
-        x: "center",
-        y: "center",
-        width: Math.min(1180, window.innerWidth - 64),
-        height: Math.min(820, window.innerHeight - 120),
+        x: restored ? restored.x : "center",
+        y: restored ? restored.y : "center",
+        width: restored?.width ?? Math.min(1180, window.innerWidth - 64),
+        height: restored?.height ?? Math.min(820, window.innerHeight - 120),
         bottom: 40,
+        max: restored?.maximized,
+        min: restored?.minimized,
         onclose: () => {
             desktopWindows.delete(key);
             windowChanged();
@@ -694,7 +704,7 @@ function bindExplorer(view) {
         item.kind === "directory" ? navigate(view, item.path) : preview(view, item);
     });
 }
-async function initializeExplorer(view) {
+async function initializeExplorer(view, restored) {
     bindExplorer(view);
     view.element("view-toggle").title =
         view.state.view === "grid" ? "Use detailed list" : "Use image grid";
@@ -703,11 +713,36 @@ async function initializeExplorer(view) {
         view.element("root-select").innerHTML = view.state.roots
             .map((root) => `<option value="${root.id}">${escapeHTML(root.name)}</option>`)
             .join("");
-        await navigate(view);
+        if (restored && restored.root < view.state.roots.length) {
+            view.state.root = restored.root;
+            view.element("root-select").value = String(restored.root);
+        }
+        await navigate(view, restored?.path || "");
     }
     catch (error) {
         $("#server-status").textContent = "OFFLINE";
         showToast(error.message);
+    }
+}
+async function loadDesktopState() {
+    try {
+        const state = (await api("/api/state"));
+        return Array.isArray(state.windows) ? state.windows : [];
+    }
+    catch {
+        return [];
+    }
+}
+async function restoreFileWindow(restored) {
+    try {
+        const result = await api(`/api/list?${new URLSearchParams({ root: String(restored.root), path: restored.path || "" })}`);
+        if (result.entry?.kind !== "file")
+            return;
+        const view = { state: { root: restored.root } };
+        await openInspector(view, result.entry, restored);
+    }
+    catch {
+        // Missing roots and files are intentionally skipped during restore.
     }
 }
 async function boot() {
@@ -719,7 +754,20 @@ async function boot() {
         // Explorer initialization reports an offline server through the normal UI.
     }
     if (window.WinBox && window.innerWidth >= 700) {
-        await openExplorerWindow();
+        const restored = await loadDesktopState();
+        restoringDesktop = true;
+        const explorers = restored.filter((window) => window.kind === "explorer");
+        if (explorers.length) {
+            for (const window of explorers)
+                await openExplorerWindow(window);
+        }
+        else {
+            await openExplorerWindow();
+        }
+        for (const window of restored.filter((window) => window.kind === "file")) {
+            await restoreFileWindow(window);
+        }
+        restoringDesktop = false;
     }
     else {
         const view = createExplorerView("fallback", createExplorerPanel());

@@ -9,7 +9,8 @@ export default defineConfig({
   },
   projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"] } }],
   webServer: {
-    command: "go run . --ip 127.0.0.1 --port 17080 --root .",
+    command:
+      "go run . --ip 127.0.0.1 --port 17080 --root . --identity-file test-results/identity.json --state-file test-results/state.json",
     url: "http://127.0.0.1:17080/api/healthz",
     reuseExistingServer: false,
     timeout: 120_000,
