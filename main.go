@@ -220,6 +220,7 @@ func (s *server) routes() http.Handler {
 	mux.HandleFunc("GET /api/roots", s.handleRoots)
 	mux.HandleFunc("GET /api/peers", s.handlePeers)
 	mux.HandleFunc("GET /api/remote/list", s.handleRemoteList)
+	mux.HandleFunc("GET /api/remote/file", s.handleRemoteFile)
 	mux.HandleFunc("POST /api/peers", s.handlePeerAdd)
 	mux.HandleFunc("DELETE /api/peers", s.handlePeerDelete)
 	mux.HandleFunc("POST /api/rename", s.handleRename)
@@ -267,7 +268,13 @@ func (s *server) handleStatePut(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
+func (s *server) handleRemoteFile(w http.ResponseWriter, r *http.Request) {
+	s.proxyPeer(w, r, "/api/file")
+}
 func (s *server) handleRemoteList(w http.ResponseWriter, r *http.Request) {
+	s.proxyPeer(w, r, "/api/list")
+}
+func (s *server) proxyPeer(w http.ResponseWriter, r *http.Request, route string) {
 	if s.peers == nil {
 		writeError(w, errors.New("peer inventory is unavailable"))
 		return
@@ -286,12 +293,15 @@ func (s *server) handleRemoteList(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	remoteURL.Path = strings.TrimSuffix(remoteURL.Path, "/") + "/api/list"
+	remoteURL.Path = strings.TrimSuffix(remoteURL.Path, "/") + route
 	query := remoteURL.Query()
 	query.Set("root", r.URL.Query().Get("root"))
 	query.Set("path", r.URL.Query().Get("path"))
 	remoteURL.RawQuery = query.Encode()
 	request, err := http.NewRequestWithContext(r.Context(), http.MethodGet, remoteURL.String(), nil)
+	if rangeHeader := r.Header.Get("Range"); rangeHeader != "" {
+		request.Header.Set("Range", rangeHeader)
+	}
 	if err != nil {
 		writeError(w, err)
 		return
@@ -302,7 +312,15 @@ func (s *server) handleRemoteList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer response.Body.Close()
-	w.Header().Set("Content-Type", "application/json")
+	if contentType := response.Header.Get("Content-Type"); contentType != "" {
+		w.Header().Set("Content-Type", contentType)
+	}
+	if contentRange := response.Header.Get("Content-Range"); contentRange != "" {
+		w.Header().Set("Content-Range", contentRange)
+	}
+	if length := response.Header.Get("Content-Length"); length != "" {
+		w.Header().Set("Content-Length", length)
+	}
 	w.WriteHeader(response.StatusCode)
 	_, _ = io.Copy(w, response.Body)
 }
