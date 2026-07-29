@@ -37,11 +37,28 @@ func Fetch(ctx context.Context, cache *diskcache.Cache, source Source, path stri
 	}
 	return body, info, nil
 }
-func readRange(ctx context.Context, s Source, path string, size int64) ([]byte, error) {
-	r, e := s.OpenRange(ctx, path, 0, size)
-	if e != nil {
-		return nil, e
+func ReadRange(ctx context.Context, source Source, path string, offset, length int64) ([]byte, error) {
+	if offset < 0 || length < 0 {
+		return nil, fmt.Errorf("invalid range")
 	}
-	defer r.Close()
-	return io.ReadAll(r)
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	reader, err := source.OpenRange(ctx, path, offset, length)
+	if err != nil {
+		return nil, err
+	}
+	defer reader.Close()
+	body, err := io.ReadAll(reader)
+	if err != nil {
+		return nil, err
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return body, nil
+}
+
+func readRange(ctx context.Context, source Source, path string, size int64) ([]byte, error) {
+	return ReadRange(ctx, source, path, 0, size)
 }

@@ -18,6 +18,14 @@ type Cache struct {
 	mu    sync.Mutex
 }
 
+func DefaultPath() (string, error) {
+	dir, err := os.UserCacheDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, "eta", "remote-files"), nil
+}
+
 func New(dir string, limit int64) (*Cache, error) {
 	if limit < 0 {
 		return nil, errors.New("negative cache limit")
