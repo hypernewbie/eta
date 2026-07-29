@@ -282,6 +282,7 @@ const audioExtensions = new Set([
 ]);
 const videoExtensions = new Set(["m4v", "mov", "mp4", "ogv", "webm"]);
 const markdownExtensions = new Set(["markdown", "md"]);
+const htmlExtensions = new Set(["htm", "html"]);
 // Prism Autoloader provides the language grammars; this only maps file names
 // and extensions to Prism's component names. Unknown text remains readable.
 const codeLanguages: Record<string, [string, string]> = {
@@ -691,6 +692,8 @@ async function renderPreview(
       content += `<video class="media-preview video-preview" controls preload="metadata" src="${source}"></video>`;
     else if (ext === "pdf")
       content += `<iframe class="pdf-preview" title="${escapeHTML(entry.name)}" src="${source}"></iframe>`;
+    else if (htmlExtensions.has(ext))
+      content += `<iframe class="pdf-preview html-preview" sandbox title="${escapeHTML(entry.name)}" src="${source}"></iframe>`;
     else {
       const result = await loadText(view, entry);
       rawText = result.text || "";
