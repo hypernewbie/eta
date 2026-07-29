@@ -287,11 +287,48 @@ func (s *server) handlePeerAdd(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
+	identity, err := probePeer(r.Context(), peer.URL)
+	if err != nil {
+		writeError(w, fmt.Errorf("probe peer identity: %w", err))
+		return
+	}
+	peer.ID, peer.Name, peer.Accent, peer.Glyph = identity.ID, identity.Hostname, identity.Accent, identity.Glyph
 	if err := s.peers.Add(peer); err != nil {
 		writeError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusCreated, peer)
+}
+
+type peerIdentity struct {
+	ID       string `json:"id"`
+	Hostname string `json:"hostname"`
+	Accent   string `json:"accent"`
+	Glyph    string `json:"glyph"`
+}
+
+func probePeer(ctx context.Context, rawURL string) (peerIdentity, error) {
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimSuffix(rawURL, "/")+"/api/identity", nil)
+	if err != nil {
+		return peerIdentity{}, err
+	}
+	client := &http.Client{Timeout: 5 * time.Second}
+	response, err := client.Do(request)
+	if err != nil {
+		return peerIdentity{}, err
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return peerIdentity{}, fmt.Errorf("%s", response.Status)
+	}
+	var identity peerIdentity
+	if err := json.NewDecoder(response.Body).Decode(&identity); err != nil {
+		return peerIdentity{}, err
+	}
+	if identity.ID == "" || identity.Hostname == "" || identity.Accent == "" || identity.Glyph == "" {
+		return peerIdentity{}, errors.New("incomplete identity")
+	}
+	return identity, nil
 }
 func (s *server) handlePeerDelete(w http.ResponseWriter, r *http.Request) {
 	if s.peers == nil {
