@@ -884,6 +884,22 @@ $("#download-button").addEventListener("click", () => {
 });
 $("#copy-button").addEventListener("click", copyText);
 $("#close-dialog").addEventListener("click", () => $("#preview-dialog").hide());
+$("#add-peer-button").addEventListener("click", async () => {
+    const url = window.prompt("Eta peer URL (for example http://pc-b:7080):");
+    if (!url)
+        return;
+    try {
+        const peer = await api("/api/peers", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ url }),
+        });
+        showToast(`Added ${peer.name}`, "success");
+    }
+    catch (error) {
+        showToast(error.message);
+    }
+});
 $("#theme-button").addEventListener("click", () => $("#theme-dialog").show());
 $("#swatches").innerHTML = Object.entries(COLORS)
     .map(([name, theme]) => `<button class="swatch" style="--swatch:${theme.accent}" data-theme="${name}"><span class="swatch-dot"></span>${name}</button>`)
