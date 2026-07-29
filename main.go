@@ -529,7 +529,9 @@ func makeEntry(name, path string, info fs.FileInfo) entry {
 func securityHeaders(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Content-Type-Options", "nosniff")
-		w.Header().Set("X-Frame-Options", "DENY")
+		if r.URL.Path != "/api/file" || r.URL.Query().Get("embed") != "1" {
+			w.Header().Set("X-Frame-Options", "DENY")
+		}
 		w.Header().Set("Referrer-Policy", "same-origin")
 		next.ServeHTTP(w, r)
 	})

@@ -568,7 +568,7 @@ async function renderPreview(view, entry, container) {
         else if (ext === "pdf")
             content += `<iframe class="pdf-preview" title="${escapeHTML(entry.name)}" src="${source}"></iframe>`;
         else if (htmlExtensions.has(ext))
-            content += `<iframe class="pdf-preview html-preview" sandbox title="${escapeHTML(entry.name)}" src="${source}"></iframe>`;
+            content += `<iframe class="pdf-preview html-preview" sandbox title="${escapeHTML(entry.name)}" src="${source}&embed=1"></iframe>`;
         else {
             const result = await loadText(view, entry);
             rawText = result.text || "";
