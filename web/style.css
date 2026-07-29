@@ -772,6 +772,43 @@ button {
   display: none;
 }
 /* WinBox provides the window behavior; these only apply Eta's existing tokens. */
+.file-context-menu {
+  position: fixed;
+  z-index: 20000;
+  min-width: 148px;
+  padding: 4px;
+  border: 1px solid var(--bg-border);
+  border-radius: 6px;
+  background: rgba(18, 18, 22, 0.97);
+  box-shadow: 0 14px 32px rgba(0, 0, 0, 0.48);
+  backdrop-filter: blur(16px);
+}
+.file-context-menu[hidden] {
+  display: none;
+}
+.file-context-menu button {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 9px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-primary);
+  font: 11px var(--font-mono);
+  text-align: left;
+}
+.file-context-menu button:hover {
+  background: var(--accent-wash);
+}
+.file-context-menu button.danger {
+  color: #fca5a5;
+}
+.file-context-menu button svg {
+  width: 14px;
+  height: 14px;
+}
 .taskbar {
   position: fixed;
   z-index: 10000;

@@ -225,6 +225,7 @@ const COLORS: Record<string, Theme> = {
 };
 
 let dialogView: ExplorerView | null = null;
+let contextEntry: { view: ExplorerView; entry: Entry } | null = null;
 let explorerSequence = 0;
 let localHost: HostIdentity = {
   id: "local",
@@ -818,6 +819,28 @@ function bindExplorer(view: ExplorerView) {
     ) as HTMLElement | null;
     if (button) navigate(view, button.dataset.path);
   });
+  view.element("entries").addEventListener("contextmenu", (event) => {
+    const row = (event.target as HTMLElement).closest(
+      ".entry",
+    ) as HTMLElement | null;
+    if (!row || row.dataset.parent) return;
+    event.preventDefault();
+    contextEntry = {
+      view,
+      entry: {
+        path: row.dataset.path || "",
+        name: row.querySelector(".entry-name, .grid-name")?.textContent || "",
+        kind: row.dataset.kind as Entry["kind"],
+        size: Number(row.dataset.size),
+        modified: row.dataset.modified || "",
+      },
+    };
+    const menu = $("#file-context-menu");
+    menu.style.left = `${event.clientX}px`;
+    menu.style.top = `${event.clientY}px`;
+    menu.hidden = false;
+    iconify();
+  });
   view.element("entries").addEventListener("click", (event) => {
     const row = (event.target as HTMLElement).closest(
       ".entry",
@@ -914,6 +937,50 @@ async function boot() {
   iconify();
 }
 
+$("#file-context-menu").addEventListener("click", async (event) => {
+  const action = (event.target as HTMLElement).closest(
+    "[data-file-action]",
+  ) as HTMLElement | null;
+  const target = contextEntry;
+  $("#file-context-menu").hidden = true;
+  contextEntry = null;
+  if (!action || !target) return;
+  try {
+    if (action.dataset.fileAction === "rename") {
+      const next = window.prompt("Rename to:", target.entry.name);
+      if (!next || next === target.entry.name) return;
+      await api("/api/rename", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          root: target.view.state.root,
+          path: target.entry.path,
+          target: next,
+        }),
+      });
+    } else if (action.dataset.fileAction === "delete") {
+      if (
+        !window.confirm(`Delete ${target.entry.name}? This cannot be undone.`)
+      )
+        return;
+      await api("/api/delete", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          root: target.view.state.root,
+          path: target.entry.path,
+        }),
+      });
+    }
+    await navigate(target.view, target.view.state.path);
+  } catch (error) {
+    showToast((error as Error).message);
+  }
+});
+document.addEventListener("pointerdown", (event) => {
+  if (!(event.target as HTMLElement).closest("#file-context-menu"))
+    $("#file-context-menu").hidden = true;
+});
 $("#eta-launcher").addEventListener("click", () => void openExplorerWindow());
 $("#task-strip").addEventListener("click", (event) => {
   const button = (event.target as HTMLElement).closest(

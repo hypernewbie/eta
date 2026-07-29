@@ -134,6 +134,7 @@ const COLORS = {
     },
 };
 let dialogView = null;
+let contextEntry = null;
 let explorerSequence = 0;
 let localHost = {
     id: "local",
@@ -686,6 +687,27 @@ function bindExplorer(view) {
         if (button)
             navigate(view, button.dataset.path);
     });
+    view.element("entries").addEventListener("contextmenu", (event) => {
+        const row = event.target.closest(".entry");
+        if (!row || row.dataset.parent)
+            return;
+        event.preventDefault();
+        contextEntry = {
+            view,
+            entry: {
+                path: row.dataset.path || "",
+                name: row.querySelector(".entry-name, .grid-name")?.textContent || "",
+                kind: row.dataset.kind,
+                size: Number(row.dataset.size),
+                modified: row.dataset.modified || "",
+            },
+        };
+        const menu = $("#file-context-menu");
+        menu.style.left = `${event.clientX}px`;
+        menu.style.top = `${event.clientY}px`;
+        menu.hidden = false;
+        iconify();
+    });
     view.element("entries").addEventListener("click", (event) => {
         const row = event.target.closest(".entry");
         if (!row)
@@ -775,6 +797,50 @@ async function boot() {
     }
     iconify();
 }
+$("#file-context-menu").addEventListener("click", async (event) => {
+    const action = event.target.closest("[data-file-action]");
+    const target = contextEntry;
+    $("#file-context-menu").hidden = true;
+    contextEntry = null;
+    if (!action || !target)
+        return;
+    try {
+        if (action.dataset.fileAction === "rename") {
+            const next = window.prompt("Rename to:", target.entry.name);
+            if (!next || next === target.entry.name)
+                return;
+            await api("/api/rename", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    root: target.view.state.root,
+                    path: target.entry.path,
+                    target: next,
+                }),
+            });
+        }
+        else if (action.dataset.fileAction === "delete") {
+            if (!window.confirm(`Delete ${target.entry.name}? This cannot be undone.`))
+                return;
+            await api("/api/delete", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    root: target.view.state.root,
+                    path: target.entry.path,
+                }),
+            });
+        }
+        await navigate(target.view, target.view.state.path);
+    }
+    catch (error) {
+        showToast(error.message);
+    }
+});
+document.addEventListener("pointerdown", (event) => {
+    if (!event.target.closest("#file-context-menu"))
+        $("#file-context-menu").hidden = true;
+});
 $("#eta-launcher").addEventListener("click", () => void openExplorerWindow());
 $("#task-strip").addEventListener("click", (event) => {
     const button = event.target.closest("[data-window]");

@@ -133,6 +133,14 @@
       <div id="task-strip" class="task-strip" aria-label="Open windows"></div>
     </nav>
 
+    <div id="file-context-menu" class="file-context-menu" hidden>
+      <button type="button" data-file-action="rename">
+        <i data-lucide="pencil"></i> Rename
+      </button>
+      <button type="button" data-file-action="delete" class="danger">
+        <i data-lucide="trash-2"></i> Delete
+      </button>
+    </div>
     <sl-dialog id="preview-dialog" label="File preview" class="preview-dialog"
       ><div id="preview-content"></div>
       <div slot="footer">
