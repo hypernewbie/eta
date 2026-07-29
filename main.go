@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/hypernewbie/eta/internal/bindaddr"
+	"github.com/hypernewbie/eta/internal/hostid"
 )
 
 //go:embed all:web
@@ -44,9 +45,10 @@ type root struct {
 }
 
 type server struct {
-	roots  []root
-	web    fs.FS
-	thumbs *thumbnailCache
+	roots    []root
+	web      fs.FS
+	thumbs   *thumbnailCache
+	identity hostid.Identity
 }
 
 type entry struct {
@@ -63,6 +65,8 @@ func main() {
 	ip := flag.String("ip", "lan", `bind address; "lan" matches Phi: loopback + private LAN + Tailnet`)
 	thumbnailCacheDir := flag.String("thumbnail-cache-dir", "", "directory for generated image thumbnails (default: user cache directory)")
 	thumbnailCacheSize := flag.String("thumbnail-cache-size", "2GB", "maximum thumbnail cache size (for example: 512MB, 2GB)")
+	identityFile := flag.String("identity-file", "", "persistent host identity file (default: user config directory)")
+	accent := flag.String("accent", "", "host accent override (one of Eta's Phi accent names)")
 	flag.Var(&roots, "root", "directory to expose (repeatable; defaults to the current directory)")
 	flag.Parse()
 
@@ -74,10 +78,28 @@ func main() {
 		roots = append(roots, cwd)
 	}
 
+	identityPath := *identityFile
+	if identityPath == "" {
+		defaultPath, err := hostid.DefaultPath()
+		if err != nil {
+			log.Fatal(err)
+		}
+		identityPath = defaultPath
+	}
+	hostname, err := os.Hostname()
+	if err != nil {
+		log.Fatal(err)
+	}
+	identity, err := hostid.LoadOrCreate(identityPath, hostname, *accent)
+	if err != nil {
+		log.Fatal(err)
+	}
+
 	s, err := newServer(roots)
 	if err != nil {
 		log.Fatal(err)
 	}
+	s.identity = identity
 	cacheDir := *thumbnailCacheDir
 	if cacheDir == "" {
 		cacheDir, err = defaultThumbnailCacheDir()
@@ -138,7 +160,7 @@ func newServer(paths []string) (*server, error) {
 	if err != nil {
 		return nil, fmt.Errorf("load embedded web assets: %w", err)
 	}
-	s := &server{web: web}
+	s := &server{web: web, identity: hostid.For("test-host", "eta")}
 	seen := map[string]bool{}
 	for _, path := range paths {
 		absolute, err := filepath.Abs(path)
@@ -167,6 +189,7 @@ func (s *server) routes() http.Handler {
 	mux.HandleFunc("GET /api/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	})
+	mux.HandleFunc("GET /api/identity", s.handleIdentity)
 	mux.HandleFunc("GET /api/roots", s.handleRoots)
 	mux.HandleFunc("GET /api/list", s.handleList)
 	mux.HandleFunc("GET /api/preview", s.handlePreview)
@@ -174,6 +197,10 @@ func (s *server) routes() http.Handler {
 	mux.HandleFunc("GET /api/file", s.handleFile)
 	mux.Handle("/", http.FileServer(http.FS(s.web)))
 	return securityHeaders(mux)
+}
+
+func (s *server) handleIdentity(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, http.StatusOK, s.identity)
 }
 
 func (s *server) handleRoots(w http.ResponseWriter, _ *http.Request) {

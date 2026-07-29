@@ -59,6 +59,12 @@ type ExplorerView = {
   state: AppState;
   element: (name: string) => HTMLElement;
 };
+type HostIdentity = {
+  id: string;
+  hostname: string;
+  accent: string;
+  glyph: string;
+};
 
 // Eta shares Phi's complete accent registry. Keep names and values in sync.
 const COLORS: Record<string, Theme> = {
@@ -198,6 +204,12 @@ const COLORS: Record<string, Theme> = {
 
 let dialogView: ExplorerView | null = null;
 let explorerSequence = 0;
+let localHost: HostIdentity = {
+  id: "local",
+  hostname: "local",
+  accent: "purple",
+  glyph: "◆",
+};
 
 function createExplorerView(key: string, panel: HTMLElement): ExplorerView {
   return {
@@ -308,7 +320,7 @@ const codeLanguages: Record<string, [string, string]> = {
   zig: ["zig", "Zig"],
 };
 
-function setTheme(name) {
+function setTheme(name: string, persist = true) {
   const theme = COLORS[name] || COLORS.purple;
   document.documentElement.style.setProperty("--accent", theme.accent);
   document.documentElement.style.setProperty("--accent-glow", theme.accentGlow);
@@ -317,7 +329,16 @@ function setTheme(name) {
     "--accent-bright",
     theme.accentBright,
   );
-  localStorage.setItem("eta_theme_color", name);
+  if (persist) localStorage.setItem("eta_theme_color", name);
+}
+function hostWindowTitle(title: string) {
+  return `${localHost.glyph} ${title}`;
+}
+async function loadLocalHost() {
+  const identity = (await api("/api/identity")) as HostIdentity;
+  localHost = identity;
+  setTheme(identity.accent, false);
+  $("#host-name").textContent = identity.hostname;
 }
 function iconify() {
   window.lucide?.createIcons({ attrs: { "stroke-width": 1.65 } });
@@ -411,7 +432,9 @@ async function openExplorerWindow() {
   document.body.classList.add("windowed");
   const number = ++explorerSequence;
   const key = `explorer:${number}`;
-  const title = number === 1 ? "Explorer" : `Explorer ${number}`;
+  const title = hostWindowTitle(
+    number === 1 ? "Explorer" : `Explorer ${number}`,
+  );
   const panel = createExplorerPanel();
   const view = createExplorerView(key, panel);
   const explorer = new window.WinBox({
@@ -599,7 +622,7 @@ async function openInspector(view: ExplorerView, entry: Entry) {
     '<sl-button class="inspector-copy" disabled><i data-lucide="copy"></i> Copy text</sl-button><sl-button class="inspector-download" variant="primary"><i data-lucide="download"></i> Download</sl-button>';
   panel.append(content, actions);
   const inspector = new WinBox({
-    title: entry.name,
+    title: hostWindowTitle(entry.name),
     mount: panel,
     class: "eta-window",
     x: "center",
@@ -615,7 +638,10 @@ async function openInspector(view: ExplorerView, entry: Entry) {
     onrestore: refreshTaskStrip,
     onminimize: refreshTaskStrip,
   });
-  desktopWindows.set(key, { title: entry.name, window: inspector });
+  desktopWindows.set(key, {
+    title: hostWindowTitle(entry.name),
+    window: inspector,
+  });
   refreshTaskStrip();
   const result = await renderPreview(view, entry, content);
   const copy = actions.querySelector(".inspector-copy") as any;
@@ -731,6 +757,11 @@ async function initializeExplorer(view: ExplorerView) {
 
 async function boot() {
   setTheme(localStorage.getItem("eta_theme_color") || "purple");
+  try {
+    await loadLocalHost();
+  } catch {
+    // Explorer initialization reports an offline server through the normal UI.
+  }
   if (window.WinBox && window.innerWidth >= 700) {
     await openExplorerWindow();
   } else {

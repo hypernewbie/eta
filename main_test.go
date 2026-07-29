@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
@@ -15,6 +16,31 @@ func TestMediaTypes(t *testing.T) {
 		if got := mediaType(name); got != want {
 			t.Errorf("mediaType(%q) = %q, want %q", name, got, want)
 		}
+	}
+}
+
+func TestIdentityEndpoint(t *testing.T) {
+	s, err := newServer([]string{t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest("GET", "/api/identity", nil)
+	response := httptest.NewRecorder()
+	s.routes().ServeHTTP(response, request)
+	if response.Code != 200 {
+		t.Fatalf("identity status = %d, want 200", response.Code)
+	}
+	var identity struct {
+		ID       string `json:"id"`
+		Hostname string `json:"hostname"`
+		Accent   string `json:"accent"`
+		Glyph    string `json:"glyph"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&identity); err != nil {
+		t.Fatal(err)
+	}
+	if identity.ID == "" || identity.Hostname == "" || identity.Accent == "" || identity.Glyph == "" {
+		t.Fatalf("incomplete identity response: %#v", identity)
 	}
 }
 

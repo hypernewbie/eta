@@ -11,6 +11,7 @@ A Go-powered, read-only filesystem viewer for a private LAN and Tailnet.
 - Native image, audio (MP3/OGG/WAV and more), video, and PDF previews.
 - Markdown rendering with Phi's vendored Marked, DOMPurify, and Highlight.js assets.
 - Phi's complete 22-color highlight registry.
+- Persistent per-host identity: stable random ID, deterministic Egyptian glyph, hostname, and accent exposed at `/api/identity`. The identity file defaults to the platform user config directory; use `--identity-file` for an explicit location and `--accent` to override its accent.
 - Symlinks are resolved server-side and rejected when they lead outside their configured root.
 - Embedded static web UI with a Phi-adjacent obsidian/glass visual system.
 
