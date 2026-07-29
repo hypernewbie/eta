@@ -1,7 +1,9 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -12,6 +14,7 @@ import (
 
 	"github.com/hypernewbie/eta/internal/diskcache"
 	"github.com/hypernewbie/eta/internal/peers"
+	"github.com/hypernewbie/eta/internal/transfer"
 	"github.com/hypernewbie/eta/internal/uistate"
 )
 
@@ -23,6 +26,50 @@ func TestMediaTypes(t *testing.T) {
 		if got := mediaType(name); got != want {
 			t.Errorf("mediaType(%q) = %q, want %q", name, got, want)
 		}
+	}
+}
+
+func TestTransferAPIResumesVerifiedChunks(t *testing.T) {
+	root := t.TempDir()
+	s, err := newServer([]string{root})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.transfers, err = transfer.NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := []byte("eta transfer")
+	manifest, err := transfer.BuildManifest(bytes.NewReader(body), 4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload, _ := json.Marshal(map[string]any{"root": 0, "path": "received.bin", "manifest": manifest})
+	create := httptest.NewRecorder()
+	s.routes().ServeHTTP(create, httptest.NewRequest("POST", "/api/transfers", bytes.NewReader(payload)))
+	if create.Code != http.StatusCreated {
+		t.Fatalf("create=%d %s", create.Code, create.Body.String())
+	}
+	var created struct {
+		ID string `json:"id"`
+	}
+	_ = json.NewDecoder(create.Body).Decode(&created)
+	for index, chunk := range [][]byte{[]byte("eta "), []byte("tran"), []byte("sfer")} {
+		response := httptest.NewRecorder()
+		s.routes().ServeHTTP(response, httptest.NewRequest("PUT", fmt.Sprintf("/api/transfers/%s/chunks/%d", created.ID, index), bytes.NewReader(chunk)))
+		if response.Code != http.StatusNoContent {
+			t.Fatalf("chunk %d = %d %s", index, response.Code, response.Body.String())
+		}
+	}
+	finishBody := bytes.NewBufferString(`{"root":0,"path":"received.bin"}`)
+	finish := httptest.NewRecorder()
+	s.routes().ServeHTTP(finish, httptest.NewRequest("POST", "/api/transfers/"+created.ID+"/finalize", finishBody))
+	if finish.Code != http.StatusNoContent {
+		t.Fatalf("finalize=%d %s", finish.Code, finish.Body.String())
+	}
+	got, err := os.ReadFile(filepath.Join(root, "received.bin"))
+	if err != nil || string(got) != string(body) {
+		t.Fatalf("got=%q err=%v", got, err)
 	}
 }
 

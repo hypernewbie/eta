@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
 	"embed"
 	"encoding/json"
 	"errors"
@@ -31,6 +32,7 @@ import (
 	"github.com/hypernewbie/eta/internal/peers"
 	"github.com/hypernewbie/eta/internal/rangecache"
 	"github.com/hypernewbie/eta/internal/remotefile"
+	"github.com/hypernewbie/eta/internal/transfer"
 	"github.com/hypernewbie/eta/internal/uistate"
 )
 
@@ -61,6 +63,7 @@ type server struct {
 	peers       *peers.Store
 	remoteCache *diskcache.Cache
 	hotRanges   *rangecache.Cache
+	transfers   *transfer.Store
 }
 
 type entry struct {
@@ -84,6 +87,7 @@ func main() {
 	remoteCacheDir := flag.String("remote-cache-dir", "", "directory for cached remote byte ranges (default: user cache directory)")
 	remoteCacheSize := flag.String("remote-cache-size", "4GB", "maximum remote byte-range cache size")
 	hotRangeCacheSize := flag.String("hot-range-cache-size", "64MB", "maximum RAM used by hot remote ranges")
+	transferDir := flag.String("transfer-dir", "", "directory for resumable transfer staging (default: user cache directory)")
 	flag.Var(&roots, "root", "directory to expose (repeatable; defaults to the current directory)")
 	flag.Parse()
 
@@ -153,6 +157,18 @@ func main() {
 		log.Fatal(err)
 	}
 	s.hotRanges = rangecache.New(hotRangeBytes)
+	stageDir := *transferDir
+	if stageDir == "" {
+		base, cacheErr := os.UserCacheDir()
+		if cacheErr != nil {
+			log.Fatal(cacheErr)
+		}
+		stageDir = filepath.Join(base, "eta", "transfers")
+	}
+	s.transfers, err = transfer.NewStore(stageDir)
+	if err != nil {
+		log.Fatal(err)
+	}
 	cacheDir := *thumbnailCacheDir
 	if cacheDir == "" {
 		cacheDir, err = defaultThumbnailCacheDir()
@@ -248,6 +264,10 @@ func (s *server) routes() http.Handler {
 	mux.HandleFunc("PUT /api/state", s.handleStatePut)
 	mux.HandleFunc("GET /api/roots", s.handleRoots)
 	mux.HandleFunc("GET /api/peers", s.handlePeers)
+	mux.HandleFunc("POST /api/transfers", s.handleTransferCreate)
+	mux.HandleFunc("GET /api/transfers/{id}", s.handleTransferStatus)
+	mux.HandleFunc("PUT /api/transfers/{id}/chunks/{chunk}", s.handleTransferChunk)
+	mux.HandleFunc("POST /api/transfers/{id}/finalize", s.handleTransferFinalize)
 	mux.HandleFunc("GET /api/remote/roots", s.handleRemoteRoots)
 	mux.HandleFunc("GET /api/remote/list", s.handleRemoteList)
 	mux.HandleFunc("GET /api/remote/file", s.handleRemoteFile)
@@ -298,6 +318,122 @@ func (s *server) handleStatePut(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+func (s *server) handleTransferCreate(w http.ResponseWriter, r *http.Request) {
+	if s.transfers == nil {
+		writeError(w, errors.New("transfer staging is unavailable"))
+		return
+	}
+	var request struct {
+		Root     int               `json:"root"`
+		Path     string            `json:"path"`
+		Manifest transfer.Manifest `json:"manifest"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 2<<20)).Decode(&request); err != nil {
+		writeError(w, err)
+		return
+	}
+	if _, err := s.transferDestination(request.Root, request.Path); err != nil {
+		writeError(w, err)
+		return
+	}
+	if request.Manifest.ChunkSize <= 0 || request.Manifest.Size < 0 || len(request.Manifest.Chunks) == 0 || len(request.Manifest.Chunks) > 1<<16 {
+		writeError(w, errors.New("invalid transfer manifest"))
+		return
+	}
+	id, err := newTransferID()
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	if err := s.transfers.Open(id, request.Manifest); err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, map[string]string{"id": id})
+}
+func (s *server) handleTransferStatus(w http.ResponseWriter, r *http.Request) {
+	if s.transfers == nil {
+		writeError(w, errors.New("transfer staging is unavailable"))
+		return
+	}
+	missing, err := s.transfers.Missing(r.PathValue("id"))
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"missing": missing})
+}
+func (s *server) handleTransferChunk(w http.ResponseWriter, r *http.Request) {
+	if s.transfers == nil {
+		writeError(w, errors.New("transfer staging is unavailable"))
+		return
+	}
+	index, err := strconv.Atoi(r.PathValue("chunk"))
+	if err != nil {
+		writeError(w, errors.New("invalid chunk index"))
+		return
+	}
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, transfer.DefaultChunkSize+1))
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	if err := s.transfers.Write(r.PathValue("id"), index, body); err != nil {
+		writeError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+func (s *server) handleTransferFinalize(w http.ResponseWriter, r *http.Request) {
+	if s.transfers == nil {
+		writeError(w, errors.New("transfer staging is unavailable"))
+		return
+	}
+	var request struct {
+		Root int    `json:"root"`
+		Path string `json:"path"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&request); err != nil {
+		writeError(w, err)
+		return
+	}
+	destination, err := s.transferDestination(request.Root, request.Path)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	if err := s.transfers.Finalize(r.PathValue("id"), destination); err != nil {
+		writeError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+func newTransferID() (string, error) {
+	var raw [16]byte
+	if _, err := rand.Read(raw[:]); err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%x", raw), nil
+}
+func (s *server) transferDestination(rootID int, raw string) (string, error) {
+	if rootID < 0 || rootID >= len(s.roots) {
+		return "", errors.New("unknown root")
+	}
+	relative := filepath.Clean(filepath.FromSlash(raw))
+	if relative == "." || filepath.IsAbs(relative) || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+		return "", errors.New("path is outside the selected root")
+	}
+	parent, err := filepath.EvalSymlinks(filepath.Dir(filepath.Join(s.roots[rootID].Path, relative)))
+	if err != nil {
+		return "", err
+	}
+	within, err := filepath.Rel(s.roots[rootID].Path, parent)
+	if err != nil || within == ".." || strings.HasPrefix(within, ".."+string(filepath.Separator)) {
+		return "", errors.New("path resolves outside the selected root")
+	}
+	return filepath.Join(parent, filepath.Base(relative)), nil
 }
 
 func (s *server) handleRemoteRoots(w http.ResponseWriter, r *http.Request) {
