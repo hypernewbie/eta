@@ -221,6 +221,8 @@ func (s *server) routes() http.Handler {
 	mux.HandleFunc("GET /api/peers", s.handlePeers)
 	mux.HandleFunc("GET /api/remote/list", s.handleRemoteList)
 	mux.HandleFunc("GET /api/remote/file", s.handleRemoteFile)
+	mux.HandleFunc("GET /api/remote/preview", s.handleRemotePreview)
+	mux.HandleFunc("GET /api/remote/thumbnail", s.handleRemoteThumbnail)
 	mux.HandleFunc("POST /api/peers", s.handlePeerAdd)
 	mux.HandleFunc("DELETE /api/peers", s.handlePeerDelete)
 	mux.HandleFunc("POST /api/rename", s.handleRename)
@@ -271,6 +273,12 @@ func (s *server) handleStatePut(w http.ResponseWriter, r *http.Request) {
 func (s *server) handleRemoteFile(w http.ResponseWriter, r *http.Request) {
 	s.proxyPeer(w, r, "/api/file")
 }
+func (s *server) handleRemotePreview(w http.ResponseWriter, r *http.Request) {
+	s.proxyPeer(w, r, "/api/preview")
+}
+func (s *server) handleRemoteThumbnail(w http.ResponseWriter, r *http.Request) {
+	s.proxyPeer(w, r, "/api/thumbnail")
+}
 func (s *server) handleRemoteList(w http.ResponseWriter, r *http.Request) {
 	s.proxyPeer(w, r, "/api/list")
 }
@@ -297,6 +305,11 @@ func (s *server) proxyPeer(w http.ResponseWriter, r *http.Request, route string)
 	query := remoteURL.Query()
 	query.Set("root", r.URL.Query().Get("root"))
 	query.Set("path", r.URL.Query().Get("path"))
+	for _, key := range []string{"size", "download", "embed"} {
+		if value := r.URL.Query().Get(key); value != "" {
+			query.Set(key, value)
+		}
+	}
 	remoteURL.RawQuery = query.Encode()
 	request, err := http.NewRequestWithContext(r.Context(), http.MethodGet, remoteURL.String(), nil)
 	if rangeHeader := r.Header.Get("Range"); rangeHeader != "" {
