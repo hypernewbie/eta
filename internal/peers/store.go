@@ -69,6 +69,18 @@ func (s *Store) Add(peer Peer) error {
 	p = append(p, peer)
 	return s.save(p)
 }
+func (s *Store) Find(raw string) (Peer, bool, error) {
+	items, err := s.List()
+	if err != nil {
+		return Peer{}, false, err
+	}
+	for _, peer := range items {
+		if peer.URL == strings.TrimSuffix(raw, "/") {
+			return peer, true, nil
+		}
+	}
+	return Peer{}, false, nil
+}
 func (s *Store) Remove(raw string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

@@ -218,6 +218,7 @@ func (s *server) routes() http.Handler {
 	mux.HandleFunc("PUT /api/state", s.handleStatePut)
 	mux.HandleFunc("GET /api/roots", s.handleRoots)
 	mux.HandleFunc("GET /api/peers", s.handlePeers)
+	mux.HandleFunc("GET /api/remote/list", s.handleRemoteList)
 	mux.HandleFunc("POST /api/peers", s.handlePeerAdd)
 	mux.HandleFunc("DELETE /api/peers", s.handlePeerDelete)
 	mux.HandleFunc("POST /api/rename", s.handleRename)
@@ -263,6 +264,37 @@ func (s *server) handleStatePut(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+func (s *server) handleRemoteList(w http.ResponseWriter, r *http.Request) {
+	if s.peers == nil {
+		writeError(w, errors.New("peer inventory is unavailable"))
+		return
+	}
+	peer, found, err := s.peers.Find(r.URL.Query().Get("peer"))
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	if !found {
+		writeError(w, errors.New("unknown peer"))
+		return
+	}
+	remoteURL := strings.TrimSuffix(peer.URL, "/") + "/api/list?root=" + r.URL.Query().Get("root") + "&path=" + r.URL.Query().Get("path")
+	request, err := http.NewRequestWithContext(r.Context(), http.MethodGet, remoteURL, nil)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	response, err := (&http.Client{Timeout: 10 * time.Second}).Do(request)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	defer response.Body.Close()
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, _ = io.Copy(w, response.Body)
 }
 
 func (s *server) handlePeers(w http.ResponseWriter, _ *http.Request) {
