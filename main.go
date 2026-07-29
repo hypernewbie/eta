@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/hypernewbie/eta/internal/bindaddr"
+	"github.com/hypernewbie/eta/internal/fileops"
 	"github.com/hypernewbie/eta/internal/hostid"
 	"github.com/hypernewbie/eta/internal/uistate"
 )
@@ -205,6 +206,8 @@ func (s *server) routes() http.Handler {
 	mux.HandleFunc("POST /api/state", s.handleStatePut)
 	mux.HandleFunc("PUT /api/state", s.handleStatePut)
 	mux.HandleFunc("GET /api/roots", s.handleRoots)
+	mux.HandleFunc("POST /api/rename", s.handleRename)
+	mux.HandleFunc("POST /api/delete", s.handleDelete)
 	mux.HandleFunc("GET /api/list", s.handleList)
 	mux.HandleFunc("GET /api/preview", s.handlePreview)
 	mux.HandleFunc("GET /api/thumbnail", s.handleThumbnail)
@@ -242,6 +245,55 @@ func (s *server) handleStatePut(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.state.Save(state); err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+func (s *server) handleRename(w http.ResponseWriter, r *http.Request) {
+	var request struct {
+		Root   int    `json:"root"`
+		Path   string `json:"path"`
+		Target string `json:"target"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&request); err != nil {
+		writeError(w, err)
+		return
+	}
+	if request.Root < 0 || request.Root >= len(s.roots) {
+		writeError(w, errors.New("invalid root"))
+		return
+	}
+	operations, err := fileops.New(s.roots[request.Root].Path)
+	if err == nil {
+		err = operations.Rename(request.Path, request.Target)
+	}
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+func (s *server) handleDelete(w http.ResponseWriter, r *http.Request) {
+	var request struct {
+		Root int    `json:"root"`
+		Path string `json:"path"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&request); err != nil {
+		writeError(w, err)
+		return
+	}
+	if request.Root < 0 || request.Root >= len(s.roots) {
+		writeError(w, errors.New("invalid root"))
+		return
+	}
+	operations, err := fileops.New(s.roots[request.Root].Path)
+	if err == nil {
+		err = operations.Delete(request.Path)
+	}
+	if err != nil {
 		writeError(w, err)
 		return
 	}
