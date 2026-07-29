@@ -498,16 +498,16 @@ function createExplorerPanel() {
   $("#explorer-backstore").append(panel);
   return panel;
 }
-async function openExplorerWindow(restored?: PersistedWindow) {
+async function openExplorerWindow(restored?: PersistedWindow, peer: Peer | null = null) {
   if (!window.WinBox || window.innerWidth < 700) return;
   document.body.classList.add("windowed");
   const number = ++explorerSequence;
   const key = `explorer:${number}`;
-  const title = hostWindowTitle(
-    number === 1 ? "Explorer" : `Explorer ${number}`,
-  );
+  const explorerName = number === 1 ? "Explorer" : `Explorer ${number}`;
+  const title = peer ? `${peer.glyph} ${explorerName}` : hostWindowTitle(explorerName);
   const panel = createExplorerPanel();
   const view = createExplorerView(key, panel);
+  view.state.peer = peer;
   const windowChanged = () => {
     refreshTaskStrip();
     scheduleDesktopSave();
@@ -902,7 +902,7 @@ async function initializeExplorer(
   view.element("view-toggle").title =
     view.state.view === "grid" ? "Use detailed list" : "Use image grid";
   try {
-    view.state.roots = await api("/api/roots");
+    view.state.roots = await api(sourceURL(view, "roots", {}));
     view.element("root-select").innerHTML = view.state.roots
       .map(
         (root) =>
