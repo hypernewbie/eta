@@ -49,6 +49,7 @@ type Theme = {
   accentBright: string;
 };
 type Root = { id: number; name: string };
+type Peer = { url: string; name: string; id: string; accent: string; glyph: string };
 type Entry = {
   name: string;
   path: string;
