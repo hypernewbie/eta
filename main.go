@@ -13,6 +13,7 @@ import (
 	"mime"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -280,8 +281,17 @@ func (s *server) handleRemoteList(w http.ResponseWriter, r *http.Request) {
 		writeError(w, errors.New("unknown peer"))
 		return
 	}
-	remoteURL := strings.TrimSuffix(peer.URL, "/") + "/api/list?root=" + r.URL.Query().Get("root") + "&path=" + r.URL.Query().Get("path")
-	request, err := http.NewRequestWithContext(r.Context(), http.MethodGet, remoteURL, nil)
+	remoteURL, err := url.Parse(peer.URL)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	remoteURL.Path = strings.TrimSuffix(remoteURL.Path, "/") + "/api/list"
+	query := remoteURL.Query()
+	query.Set("root", r.URL.Query().Get("root"))
+	query.Set("path", r.URL.Query().Get("path"))
+	remoteURL.RawQuery = query.Encode()
+	request, err := http.NewRequestWithContext(r.Context(), http.MethodGet, remoteURL.String(), nil)
 	if err != nil {
 		writeError(w, err)
 		return
