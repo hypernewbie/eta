@@ -25,6 +25,7 @@ import (
 	"github.com/hypernewbie/eta/internal/bindaddr"
 	"github.com/hypernewbie/eta/internal/fileops"
 	"github.com/hypernewbie/eta/internal/hostid"
+	"github.com/hypernewbie/eta/internal/peers"
 	"github.com/hypernewbie/eta/internal/uistate"
 )
 
@@ -52,6 +53,7 @@ type server struct {
 	thumbs   *thumbnailCache
 	identity hostid.Identity
 	state    *uistate.Store
+	peers    *peers.Store
 }
 
 type entry struct {
@@ -71,6 +73,7 @@ func main() {
 	identityFile := flag.String("identity-file", "", "persistent host identity file (default: user config directory)")
 	accent := flag.String("accent", "", "host accent override (one of Eta's Phi accent names)")
 	stateFile := flag.String("state-file", "", "persistent UI state file (default: user config directory)")
+	peersFile := flag.String("peers-file", "", "explicit coordinator peer inventory file (default: user config directory)")
 	flag.Var(&roots, "root", "directory to expose (repeatable; defaults to the current directory)")
 	flag.Parse()
 
@@ -112,6 +115,14 @@ func main() {
 		}
 	}
 	s.state = uistate.New(statePath)
+	peerPath := *peersFile
+	if peerPath == "" {
+		peerPath, err = peers.DefaultPath()
+		if err != nil {
+			log.Fatal(err)
+		}
+	}
+	s.peers = peers.New(peerPath)
 	cacheDir := *thumbnailCacheDir
 	if cacheDir == "" {
 		cacheDir, err = defaultThumbnailCacheDir()
@@ -206,6 +217,9 @@ func (s *server) routes() http.Handler {
 	mux.HandleFunc("POST /api/state", s.handleStatePut)
 	mux.HandleFunc("PUT /api/state", s.handleStatePut)
 	mux.HandleFunc("GET /api/roots", s.handleRoots)
+	mux.HandleFunc("GET /api/peers", s.handlePeers)
+	mux.HandleFunc("POST /api/peers", s.handlePeerAdd)
+	mux.HandleFunc("DELETE /api/peers", s.handlePeerDelete)
 	mux.HandleFunc("POST /api/rename", s.handleRename)
 	mux.HandleFunc("POST /api/delete", s.handleDelete)
 	mux.HandleFunc("GET /api/list", s.handleList)
@@ -249,6 +263,46 @@ func (s *server) handleStatePut(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+func (s *server) handlePeers(w http.ResponseWriter, _ *http.Request) {
+	if s.peers == nil {
+		writeError(w, errors.New("peer inventory is unavailable"))
+		return
+	}
+	items, err := s.peers.List()
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, items)
+}
+func (s *server) handlePeerAdd(w http.ResponseWriter, r *http.Request) {
+	if s.peers == nil {
+		writeError(w, errors.New("peer inventory is unavailable"))
+		return
+	}
+	var peer peers.Peer
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&peer); err != nil {
+		writeError(w, err)
+		return
+	}
+	if err := s.peers.Add(peer); err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, peer)
+}
+func (s *server) handlePeerDelete(w http.ResponseWriter, r *http.Request) {
+	if s.peers == nil {
+		writeError(w, errors.New("peer inventory is unavailable"))
+		return
+	}
+	if err := s.peers.Remove(r.URL.Query().Get("url")); err != nil {
+		writeError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (s *server) handleRename(w http.ResponseWriter, r *http.Request) {
