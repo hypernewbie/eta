@@ -367,7 +367,7 @@ function scheduleDesktopSave() {
 }
 function refreshTaskStrip() {
     const taskStrip = $("#task-strip");
-    const peerButtons = enrolledPeers.map((peer) => `<sl-button size="small" class="task-button" data-peer="${escapeHTML(peer.url)}"><span class="peer-glyph">${escapeHTML(peer.glyph)}</span>${escapeHTML(peer.name)}</sl-button>`);
+    const peerButtons = enrolledPeers.map((peer) => `<sl-button size="small" class="task-button peer-launcher" style="--window-accent:${escapeHTML(COLORS[peer.accent]?.accent || "#7c6af7")}" data-peer="${escapeHTML(peer.url)}"><span class="peer-glyph">${escapeHTML(peer.glyph)}</span>${escapeHTML(peer.name)}</sl-button>`);
     const windows = [...desktopWindows.entries()].map(([key, item]) => `<sl-button size="small" class="task-button" data-window="${escapeHTML(key)}"><i data-lucide="${key.startsWith("explorer:") ? "folder-open" : "file-text"}"></i>${escapeHTML(item.title)}</sl-button>`);
     taskStrip.innerHTML = [...peerButtons, ...windows].join("");
     iconify();
@@ -399,6 +399,8 @@ async function openExplorerWindow(restored, peer = null) {
     const explorerName = number === 1 ? "Explorer" : `Explorer ${number}`;
     const title = peer ? `${peer.glyph} ${explorerName}` : hostWindowTitle(explorerName);
     const panel = createExplorerPanel();
+    if (peer)
+        panel.style.setProperty("--window-accent", COLORS[peer.accent]?.accent || "#7c6af7");
     const view = createExplorerView(key, panel);
     view.state.peer = peer;
     const windowChanged = () => {
@@ -408,7 +410,7 @@ async function openExplorerWindow(restored, peer = null) {
     const explorer = new window.WinBox({
         title,
         mount: panel,
-        class: "eta-window",
+        class: peer ? "eta-window peer-window" : "eta-window",
         x: restored ? restored.x : "center",
         y: restored?.y ?? 64,
         width: restored?.width ??

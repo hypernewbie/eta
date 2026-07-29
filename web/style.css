@@ -908,6 +908,14 @@ iconify-icon.entry-icon {
     inset 0 -1px 0 rgba(0, 0, 0, 0.72);
   backdrop-filter: blur(26px) saturate(175%);
 }
+.peer-window .wb-header::before {
+  background: var(--window-accent);
+  box-shadow: 0 0 10px var(--window-accent);
+}
+.peer-window .wb-title,
+.peer-launcher .peer-glyph {
+  color: var(--window-accent, var(--accent-bright));
+}
 .winbox.focus {
   border-color: var(--accent-edge);
   box-shadow:
