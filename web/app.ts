@@ -64,6 +64,7 @@ type AppState = {
   selected: Entry | null;
   rawText: string;
   view: "list" | "grid";
+  peer: Peer | null;
 };
 type ExplorerView = {
   key: string;
@@ -247,6 +248,7 @@ function createExplorerView(key: string, panel: HTMLElement): ExplorerView {
       rawText: "",
       view:
         localStorage.getItem("eta_directory_view") === "grid" ? "grid" : "list",
+      peer: null,
     },
     element: (name: string) => {
       const element = panel.querySelector(`[data-explorer="${name}"]`);
@@ -373,16 +375,19 @@ function escapeHTML(value) {
   node.textContent = value;
   return node.innerHTML;
 }
-function fileURL(root: number, path: string, download = false) {
-  const params = new URLSearchParams({ root: String(root), path });
-  if (download) params.set("download", "1");
-  return `/api/file?${params}`;
+function sourceURL(view: ExplorerView, endpoint: string, params: Record<string, string>) {
+  const query = new URLSearchParams(params);
+  if (view.state.peer) query.set("peer", view.state.peer.url);
+  return `${view.state.peer ? "/api/remote" : "/api"}/${endpoint}?${query}`;
 }
-function previewURL(root: number, path: string) {
-  return `/api/preview?${new URLSearchParams({ root: String(root), path })}`;
+function fileURL(view: ExplorerView, path: string, download = false) {
+  return sourceURL(view, "file", { root: String(view.state.root), path, ...(download ? { download: "1" } : {}) });
 }
-function thumbnailURL(root: number, path: string, edge = 320) {
-  return `/api/thumbnail?${new URLSearchParams({ root: String(root), path, size: String(edge) })}`;
+function previewURL(view: ExplorerView, path: string) {
+  return sourceURL(view, "preview", { root: String(view.state.root), path });
+}
+function thumbnailURL(view: ExplorerView, path: string, edge = 320) {
+  return sourceURL(view, "thumbnail", { root: String(view.state.root), path, size: String(edge) });
 }
 function extension(name) {
   return name.includes(".")
@@ -597,7 +602,7 @@ function gridEntryMarkup(view: ExplorerView, entry: Entry) {
   const image =
     entry.kind === "file" && thumbnailExtensions.has(extension(entry.name));
   const visual = image
-    ? `<img class="thumbnail" loading="lazy" decoding="async" src="${thumbnailURL(view.state.root, entry.path)}" alt="">`
+    ? `<img class="thumbnail" loading="lazy" decoding="async" src="${thumbnailURL(view, entry.path)}" alt="">`
     : `<span class="grid-icon"><i data-lucide="${entry.kind === "directory" ? "folder" : "file"}"></i></span>`;
   return `<button class="entry grid-entry ${entry.kind}" data-path="${escapeHTML(entry.path)}" data-kind="${entry.kind}" data-size="${entry.size}" data-modified="${entry.modified}">${visual}<span class="grid-name">${escapeHTML(entry.name)}</span><span class="grid-meta">${entry.kind === "directory" ? "Folder" : bytes(entry.size)}</span></button>`;
 }
@@ -632,9 +637,7 @@ async function navigate(view: ExplorerView, path = "") {
   renderBreadcrumbs(view);
   iconify();
   try {
-    const result = await api(
-      `/api/list?${new URLSearchParams({ root: String(view.state.root), path })}`,
-    );
+    const result = await api(sourceURL(view, "list", { root: String(view.state.root), path }));
     if (result.entry && result.entry.kind !== "directory") {
       await preview(view, result.entry);
       return;
@@ -648,7 +651,7 @@ async function navigate(view: ExplorerView, path = "") {
 }
 
 async function loadText(view: ExplorerView, entry: Entry) {
-  const result = await api(previewURL(view.state.root, entry.path));
+  const result = await api(previewURL(view, entry.path));
   if (result.binary)
     return { text: "", binary: true, truncated: result.truncated };
   return result;
@@ -683,7 +686,7 @@ async function renderPreview(
   let binary = true;
   try {
     const ext = extension(entry.name);
-    const source = fileURL(view.state.root, entry.path);
+    const source = fileURL(view, entry.path);
     let content = fileFacts(entry);
     if (imageExtensions.has(ext))
       content += `<img class="preview-image" alt="${escapeHTML(entry.name)}" src="${source}">`;
@@ -789,7 +792,7 @@ async function openInspector(
     .querySelector(".inspector-download")
     ?.addEventListener("click", () => {
       window.open(
-        fileURL(view.state.root, entry.path, true),
+        fileURL(view, entry.path, true),
         "_blank",
         "noopener",
       );
@@ -978,7 +981,7 @@ $("#file-context-menu").addEventListener("click", async (event) => {
   try {
     if (action.dataset.fileAction === "trusted-html") {
       window.open(
-        fileURL(target.view.state.root, target.entry.path),
+        fileURL(target.view, target.entry.path),
         "_blank",
         "noopener",
       );
@@ -1029,7 +1032,7 @@ $("#task-strip").addEventListener("click", (event) => {
 $("#download-button").addEventListener("click", () => {
   if (dialogView?.state.selected)
     window.open(
-      fileURL(dialogView.state.root, dialogView.state.selected.path, true),
+      fileURL(dialogView, dialogView.state.selected.path, true),
       "_blank",
       "noopener",
     );

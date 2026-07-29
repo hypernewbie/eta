@@ -153,6 +153,7 @@ function createExplorerView(key, panel) {
             selected: null,
             rawText: "",
             view: localStorage.getItem("eta_directory_view") === "grid" ? "grid" : "list",
+            peer: null,
         },
         element: (name) => {
             const element = panel.querySelector(`[data-explorer="${name}"]`);
@@ -278,17 +279,20 @@ function escapeHTML(value) {
     node.textContent = value;
     return node.innerHTML;
 }
-function fileURL(root, path, download = false) {
-    const params = new URLSearchParams({ root: String(root), path });
-    if (download)
-        params.set("download", "1");
-    return `/api/file?${params}`;
+function sourceURL(view, endpoint, params) {
+    const query = new URLSearchParams(params);
+    if (view.state.peer)
+        query.set("peer", view.state.peer.url);
+    return `${view.state.peer ? "/api/remote" : "/api"}/${endpoint}?${query}`;
 }
-function previewURL(root, path) {
-    return `/api/preview?${new URLSearchParams({ root: String(root), path })}`;
+function fileURL(view, path, download = false) {
+    return sourceURL(view, "file", { root: String(view.state.root), path, ...(download ? { download: "1" } : {}) });
 }
-function thumbnailURL(root, path, edge = 320) {
-    return `/api/thumbnail?${new URLSearchParams({ root: String(root), path, size: String(edge) })}`;
+function previewURL(view, path) {
+    return sourceURL(view, "preview", { root: String(view.state.root), path });
+}
+function thumbnailURL(view, path, edge = 320) {
+    return sourceURL(view, "thumbnail", { root: String(view.state.root), path, size: String(edge) });
 }
 function extension(name) {
     return name.includes(".")
@@ -480,7 +484,7 @@ function entryMarkup(entry) {
 function gridEntryMarkup(view, entry) {
     const image = entry.kind === "file" && thumbnailExtensions.has(extension(entry.name));
     const visual = image
-        ? `<img class="thumbnail" loading="lazy" decoding="async" src="${thumbnailURL(view.state.root, entry.path)}" alt="">`
+        ? `<img class="thumbnail" loading="lazy" decoding="async" src="${thumbnailURL(view, entry.path)}" alt="">`
         : `<span class="grid-icon"><i data-lucide="${entry.kind === "directory" ? "folder" : "file"}"></i></span>`;
     return `<button class="entry grid-entry ${entry.kind}" data-path="${escapeHTML(entry.path)}" data-kind="${entry.kind}" data-size="${entry.size}" data-modified="${entry.modified}">${visual}<span class="grid-name">${escapeHTML(entry.name)}</span><span class="grid-meta">${entry.kind === "directory" ? "Folder" : bytes(entry.size)}</span></button>`;
 }
@@ -513,7 +517,7 @@ async function navigate(view, path = "") {
     renderBreadcrumbs(view);
     iconify();
     try {
-        const result = await api(`/api/list?${new URLSearchParams({ root: String(view.state.root), path })}`);
+        const result = await api(sourceURL(view, "list", { root: String(view.state.root), path }));
         if (result.entry && result.entry.kind !== "directory") {
             await preview(view, result.entry);
             return;
@@ -527,7 +531,7 @@ async function navigate(view, path = "") {
     }
 }
 async function loadText(view, entry) {
-    const result = await api(previewURL(view.state.root, entry.path));
+    const result = await api(previewURL(view, entry.path));
     if (result.binary)
         return { text: "", binary: true, truncated: result.truncated };
     return result;
@@ -557,7 +561,7 @@ async function renderPreview(view, entry, container) {
     let binary = true;
     try {
         const ext = extension(entry.name);
-        const source = fileURL(view.state.root, entry.path);
+        const source = fileURL(view, entry.path);
         let content = fileFacts(entry);
         if (imageExtensions.has(ext))
             content += `<img class="preview-image" alt="${escapeHTML(entry.name)}" src="${source}">`;
@@ -661,7 +665,7 @@ async function openInspector(view, entry, restored) {
     actions
         .querySelector(".inspector-download")
         ?.addEventListener("click", () => {
-        window.open(fileURL(view.state.root, entry.path, true), "_blank", "noopener");
+        window.open(fileURL(view, entry.path, true), "_blank", "noopener");
     });
 }
 async function preview(view, entry) {
@@ -833,7 +837,7 @@ $("#file-context-menu").addEventListener("click", async (event) => {
         return;
     try {
         if (action.dataset.fileAction === "trusted-html") {
-            window.open(fileURL(target.view.state.root, target.entry.path), "_blank", "noopener");
+            window.open(fileURL(target.view, target.entry.path), "_blank", "noopener");
             return;
         }
         if (action.dataset.fileAction === "rename") {
@@ -880,7 +884,7 @@ $("#task-strip").addEventListener("click", (event) => {
 });
 $("#download-button").addEventListener("click", () => {
     if (dialogView?.state.selected)
-        window.open(fileURL(dialogView.state.root, dialogView.state.selected.path, true), "_blank", "noopener");
+        window.open(fileURL(dialogView, dialogView.state.selected.path, true), "_blank", "noopener");
 });
 $("#copy-button").addEventListener("click", copyText);
 $("#close-dialog").addEventListener("click", () => $("#preview-dialog").hide());
