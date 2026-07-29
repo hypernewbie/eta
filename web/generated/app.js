@@ -328,6 +328,7 @@ function showToast(message, variant = "danger") {
     alert.toast();
 }
 const desktopWindows = new Map();
+let enrolledPeers = [];
 const explorerViews = new Map();
 let restoringDesktop = false;
 let stateSaveTimer;
@@ -366,9 +367,9 @@ function scheduleDesktopSave() {
 }
 function refreshTaskStrip() {
     const taskStrip = $("#task-strip");
-    taskStrip.innerHTML = [...desktopWindows.entries()]
-        .map(([key, item]) => `<sl-button size="small" class="task-button" data-window="${escapeHTML(key)}"><i data-lucide="${key.startsWith("explorer:") ? "folder-open" : "file-text"}"></i>${escapeHTML(item.title)}</sl-button>`)
-        .join("");
+    const peerButtons = enrolledPeers.map((peer) => `<sl-button size="small" class="task-button" data-peer="${escapeHTML(peer.url)}"><span class="peer-glyph">${escapeHTML(peer.glyph)}</span>${escapeHTML(peer.name)}</sl-button>`);
+    const windows = [...desktopWindows.entries()].map(([key, item]) => `<sl-button size="small" class="task-button" data-window="${escapeHTML(key)}"><i data-lucide="${key.startsWith("explorer:") ? "folder-open" : "file-text"}"></i>${escapeHTML(item.title)}</sl-button>`);
+    taskStrip.innerHTML = [...peerButtons, ...windows].join("");
     iconify();
 }
 function focusDesktopWindow(key) {
@@ -809,6 +810,12 @@ async function boot() {
         // Explorer initialization reports an offline server through the normal UI.
     }
     if (window.WinBox && window.innerWidth >= 700) {
+        try {
+            enrolledPeers = await api("/api/peers");
+        }
+        catch {
+            enrolledPeers = [];
+        }
         const restored = await loadDesktopState();
         restoringDesktop = true;
         const explorers = restored.filter((window) => window.kind === "explorer");
@@ -881,8 +888,14 @@ document.addEventListener("pointerdown", (event) => {
 $("#eta-launcher").addEventListener("click", () => void openExplorerWindow());
 $("#task-strip").addEventListener("click", (event) => {
     const button = event.target.closest("[data-window]");
-    if (button)
+    if (button) {
         focusDesktopWindow(button.dataset.window || "");
+        return;
+    }
+    const peerButton = event.target.closest("[data-peer]");
+    const peer = enrolledPeers.find((candidate) => candidate.url === peerButton?.dataset.peer);
+    if (peer)
+        void openExplorerWindow(undefined, peer);
 });
 $("#download-button").addEventListener("click", () => {
     if (dialogView?.state.selected)
