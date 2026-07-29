@@ -308,8 +308,8 @@ function date(value) {
 function parentPath(view) {
     return view.state.path.split("/").filter(Boolean).slice(0, -1).join("/");
 }
-async function api(path) {
-    const response = await fetch(path);
+async function api(path, init) {
+    const response = await fetch(path, init);
     const body = await response.json().catch(() => ({}));
     if (!response.ok)
         throw new Error(body.error || `Request failed (${response.status})`);
@@ -322,6 +322,40 @@ function showToast(message, variant = "danger") {
     alert.toast();
 }
 const desktopWindows = new Map();
+let stateSaveTimer;
+function capturedDesktopState() {
+    return [...desktopWindows.values()].map((item) => ({
+        ...item.state(),
+        x: Math.max(0, Math.round(item.window.x)),
+        y: Math.max(0, Math.round(item.window.y)),
+        width: Math.max(0, Math.round(item.window.width)),
+        height: Math.max(0, Math.round(item.window.height)),
+        minimized: item.window.min,
+        maximized: item.window.max,
+    }));
+}
+function statePayload() {
+    return JSON.stringify({ version: 1, windows: capturedDesktopState() });
+}
+async function saveDesktopState() {
+    try {
+        await api("/api/state", {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: statePayload(),
+        });
+    }
+    catch {
+        // State persistence must never interrupt normal desktop use.
+    }
+}
+function scheduleDesktopSave() {
+    if (!desktopEnabled())
+        return;
+    if (stateSaveTimer)
+        window.clearTimeout(stateSaveTimer);
+    stateSaveTimer = window.setTimeout(() => void saveDesktopState(), 400);
+}
 function refreshTaskStrip() {
     const taskStrip = $("#task-strip");
     taskStrip.innerHTML = [...desktopWindows.entries()]
@@ -356,6 +390,10 @@ async function openExplorerWindow() {
     const title = hostWindowTitle(number === 1 ? "Explorer" : `Explorer ${number}`);
     const panel = createExplorerPanel();
     const view = createExplorerView(key, panel);
+    const windowChanged = () => {
+        refreshTaskStrip();
+        scheduleDesktopSave();
+    };
     const explorer = new window.WinBox({
         title,
         mount: panel,
@@ -367,15 +405,27 @@ async function openExplorerWindow() {
         bottom: 40,
         onclose: () => {
             desktopWindows.delete(key);
-            refreshTaskStrip();
+            windowChanged();
             queueMicrotask(() => panel.remove());
         },
-        onfocus: refreshTaskStrip,
-        onrestore: refreshTaskStrip,
-        onminimize: refreshTaskStrip,
+        onfocus: windowChanged,
+        onmove: windowChanged,
+        onresize: windowChanged,
+        onmaximize: windowChanged,
+        onrestore: windowChanged,
+        onminimize: windowChanged,
     });
-    desktopWindows.set(key, { title, window: explorer });
+    desktopWindows.set(key, {
+        title,
+        window: explorer,
+        state: () => ({
+            kind: "explorer",
+            root: view.state.root,
+            path: view.state.path,
+        }),
+    });
     refreshTaskStrip();
+    scheduleDesktopSave();
     await initializeExplorer(view);
 }
 function renderBreadcrumbs(view) {
@@ -526,6 +576,10 @@ async function openInspector(view, entry) {
     actions.innerHTML =
         '<sl-button class="inspector-copy" disabled><i data-lucide="copy"></i> Copy text</sl-button><sl-button class="inspector-download" variant="primary"><i data-lucide="download"></i> Download</sl-button>';
     panel.append(content, actions);
+    const windowChanged = () => {
+        refreshTaskStrip();
+        scheduleDesktopSave();
+    };
     const inspector = new WinBox({
         title: hostWindowTitle(entry.name),
         mount: panel,
@@ -537,17 +591,22 @@ async function openInspector(view, entry) {
         bottom: 40,
         onclose: () => {
             desktopWindows.delete(key);
-            refreshTaskStrip();
+            windowChanged();
         },
-        onfocus: refreshTaskStrip,
-        onrestore: refreshTaskStrip,
-        onminimize: refreshTaskStrip,
+        onfocus: windowChanged,
+        onmove: windowChanged,
+        onresize: windowChanged,
+        onmaximize: windowChanged,
+        onrestore: windowChanged,
+        onminimize: windowChanged,
     });
     desktopWindows.set(key, {
         title: hostWindowTitle(entry.name),
         window: inspector,
+        state: () => ({ kind: "file", root: view.state.root, path: entry.path }),
     });
     refreshTaskStrip();
+    scheduleDesktopSave();
     const result = await renderPreview(view, entry, content);
     const copy = actions.querySelector(".inspector-copy");
     copy.disabled = result.binary;
@@ -694,5 +753,10 @@ $("#swatches").addEventListener("click", (event) => {
 document.addEventListener("keydown", (event) => {
     if (event.key === "Escape" && $("#preview-dialog").open)
         $("#preview-dialog").hide();
+});
+window.addEventListener("pagehide", () => {
+    if (!desktopEnabled())
+        return;
+    navigator.sendBeacon("/api/state", new Blob([statePayload()], { type: "application/json" }));
 });
 void boot();

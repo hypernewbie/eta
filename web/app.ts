@@ -18,8 +18,13 @@ type WinBoxOptions = {
   bottom?: number;
   class?: string;
   close?: boolean;
+  min?: boolean;
+  max?: boolean;
   onclose?: () => boolean | void;
   onfocus?: () => void;
+  onmove?: () => void;
+  onresize?: () => void;
+  onmaximize?: () => void;
   onrestore?: () => void;
   onminimize?: () => void;
 };
@@ -27,6 +32,12 @@ type WinBoxInstance = {
   focus: () => void;
   restore: () => void;
   minimize: () => void;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  min: boolean;
+  max: boolean;
 };
 
 declare const dayjs: any;
@@ -64,6 +75,17 @@ type HostIdentity = {
   hostname: string;
   accent: string;
   glyph: string;
+};
+type PersistedWindow = {
+  kind: "explorer" | "file";
+  root: number;
+  path?: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  minimized: boolean;
+  maximized: boolean;
 };
 
 // Eta shares Phi's complete accent registry. Keep names and values in sync.
@@ -382,8 +404,8 @@ function parentPath(view: ExplorerView) {
   return view.state.path.split("/").filter(Boolean).slice(0, -1).join("/");
 }
 
-async function api(path) {
-  const response = await fetch(path);
+async function api(path: string, init?: RequestInit) {
+  const response = await fetch(path, init);
   const body = await response.json().catch(() => ({}));
   if (!response.ok)
     throw new Error(body.error || `Request failed (${response.status})`);
@@ -396,8 +418,47 @@ function showToast(message, variant = "danger") {
   alert.toast();
 }
 
-type DesktopWindow = { title: string; window: WinBoxInstance };
+type DesktopWindow = {
+  title: string;
+  window: WinBoxInstance;
+  state: () => Omit<
+    PersistedWindow,
+    "x" | "y" | "width" | "height" | "minimized" | "maximized"
+  >;
+};
 const desktopWindows = new Map<string, DesktopWindow>();
+let stateSaveTimer: number | undefined;
+
+function capturedDesktopState(): PersistedWindow[] {
+  return [...desktopWindows.values()].map((item) => ({
+    ...item.state(),
+    x: Math.max(0, Math.round(item.window.x)),
+    y: Math.max(0, Math.round(item.window.y)),
+    width: Math.max(0, Math.round(item.window.width)),
+    height: Math.max(0, Math.round(item.window.height)),
+    minimized: item.window.min,
+    maximized: item.window.max,
+  }));
+}
+function statePayload() {
+  return JSON.stringify({ version: 1, windows: capturedDesktopState() });
+}
+async function saveDesktopState() {
+  try {
+    await api("/api/state", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: statePayload(),
+    });
+  } catch {
+    // State persistence must never interrupt normal desktop use.
+  }
+}
+function scheduleDesktopSave() {
+  if (!desktopEnabled()) return;
+  if (stateSaveTimer) window.clearTimeout(stateSaveTimer);
+  stateSaveTimer = window.setTimeout(() => void saveDesktopState(), 400);
+}
 
 function refreshTaskStrip() {
   const taskStrip = $("#task-strip");
@@ -437,6 +498,10 @@ async function openExplorerWindow() {
   );
   const panel = createExplorerPanel();
   const view = createExplorerView(key, panel);
+  const windowChanged = () => {
+    refreshTaskStrip();
+    scheduleDesktopSave();
+  };
   const explorer = new window.WinBox({
     title,
     mount: panel,
@@ -448,15 +513,27 @@ async function openExplorerWindow() {
     bottom: 40,
     onclose: () => {
       desktopWindows.delete(key);
-      refreshTaskStrip();
+      windowChanged();
       queueMicrotask(() => panel.remove());
     },
-    onfocus: refreshTaskStrip,
-    onrestore: refreshTaskStrip,
-    onminimize: refreshTaskStrip,
+    onfocus: windowChanged,
+    onmove: windowChanged,
+    onresize: windowChanged,
+    onmaximize: windowChanged,
+    onrestore: windowChanged,
+    onminimize: windowChanged,
   });
-  desktopWindows.set(key, { title, window: explorer });
+  desktopWindows.set(key, {
+    title,
+    window: explorer,
+    state: () => ({
+      kind: "explorer",
+      root: view.state.root,
+      path: view.state.path,
+    }),
+  });
   refreshTaskStrip();
+  scheduleDesktopSave();
   await initializeExplorer(view);
 }
 
@@ -621,6 +698,10 @@ async function openInspector(view: ExplorerView, entry: Entry) {
   actions.innerHTML =
     '<sl-button class="inspector-copy" disabled><i data-lucide="copy"></i> Copy text</sl-button><sl-button class="inspector-download" variant="primary"><i data-lucide="download"></i> Download</sl-button>';
   panel.append(content, actions);
+  const windowChanged = () => {
+    refreshTaskStrip();
+    scheduleDesktopSave();
+  };
   const inspector = new WinBox({
     title: hostWindowTitle(entry.name),
     mount: panel,
@@ -632,17 +713,22 @@ async function openInspector(view: ExplorerView, entry: Entry) {
     bottom: 40,
     onclose: () => {
       desktopWindows.delete(key);
-      refreshTaskStrip();
+      windowChanged();
     },
-    onfocus: refreshTaskStrip,
-    onrestore: refreshTaskStrip,
-    onminimize: refreshTaskStrip,
+    onfocus: windowChanged,
+    onmove: windowChanged,
+    onresize: windowChanged,
+    onmaximize: windowChanged,
+    onrestore: windowChanged,
+    onminimize: windowChanged,
   });
   desktopWindows.set(key, {
     title: hostWindowTitle(entry.name),
     window: inspector,
+    state: () => ({ kind: "file", root: view.state.root, path: entry.path }),
   });
   refreshTaskStrip();
+  scheduleDesktopSave();
   const result = await renderPreview(view, entry, content);
   const copy = actions.querySelector(".inspector-copy") as any;
   copy.disabled = result.binary;
@@ -806,5 +892,12 @@ $("#swatches").addEventListener("click", (event) => {
 document.addEventListener("keydown", (event) => {
   if (event.key === "Escape" && $("#preview-dialog").open)
     $("#preview-dialog").hide();
+});
+window.addEventListener("pagehide", () => {
+  if (!desktopEnabled()) return;
+  navigator.sendBeacon(
+    "/api/state",
+    new Blob([statePayload()], { type: "application/json" }),
+  );
 });
 void boot();

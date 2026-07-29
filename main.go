@@ -202,6 +202,7 @@ func (s *server) routes() http.Handler {
 	})
 	mux.HandleFunc("GET /api/identity", s.handleIdentity)
 	mux.HandleFunc("GET /api/state", s.handleStateGet)
+	mux.HandleFunc("POST /api/state", s.handleStatePut)
 	mux.HandleFunc("PUT /api/state", s.handleStatePut)
 	mux.HandleFunc("GET /api/roots", s.handleRoots)
 	mux.HandleFunc("GET /api/list", s.handleList)
