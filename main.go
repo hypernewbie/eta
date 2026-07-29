@@ -219,6 +219,7 @@ func (s *server) routes() http.Handler {
 	mux.HandleFunc("PUT /api/state", s.handleStatePut)
 	mux.HandleFunc("GET /api/roots", s.handleRoots)
 	mux.HandleFunc("GET /api/peers", s.handlePeers)
+	mux.HandleFunc("GET /api/remote/roots", s.handleRemoteRoots)
 	mux.HandleFunc("GET /api/remote/list", s.handleRemoteList)
 	mux.HandleFunc("GET /api/remote/file", s.handleRemoteFile)
 	mux.HandleFunc("GET /api/remote/preview", s.handleRemotePreview)
@@ -270,6 +271,9 @@ func (s *server) handleStatePut(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
+func (s *server) handleRemoteRoots(w http.ResponseWriter, r *http.Request) {
+	s.proxyPeer(w, r, "/api/roots")
+}
 func (s *server) handleRemoteFile(w http.ResponseWriter, r *http.Request) {
 	s.proxyPeer(w, r, "/api/file")
 }
