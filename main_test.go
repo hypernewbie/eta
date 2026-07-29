@@ -5,7 +5,10 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+
+	"github.com/hypernewbie/eta/internal/uistate"
 )
 
 func TestMediaTypes(t *testing.T) {
@@ -16,6 +19,33 @@ func TestMediaTypes(t *testing.T) {
 		if got := mediaType(name); got != want {
 			t.Errorf("mediaType(%q) = %q, want %q", name, got, want)
 		}
+	}
+}
+
+func TestStateEndpoint(t *testing.T) {
+	s, err := newServer([]string{t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.state = uistate.New(filepath.Join(t.TempDir(), "state.json"))
+	put := httptest.NewRequest("PUT", "/api/state", strings.NewReader(`{"version":1,"windows":[{"kind":"explorer","root":0,"path":"docs"}]}`))
+	put.Header.Set("Content-Type", "application/json")
+	putResponse := httptest.NewRecorder()
+	s.routes().ServeHTTP(putResponse, put)
+	if putResponse.Code != 200 {
+		t.Fatalf("state PUT status = %d, want 200", putResponse.Code)
+	}
+	getResponse := httptest.NewRecorder()
+	s.routes().ServeHTTP(getResponse, httptest.NewRequest("GET", "/api/state", nil))
+	if getResponse.Code != 200 {
+		t.Fatalf("state GET status = %d, want 200", getResponse.Code)
+	}
+	var state uistate.State
+	if err := json.NewDecoder(getResponse.Body).Decode(&state); err != nil {
+		t.Fatal(err)
+	}
+	if len(state.Windows) != 1 || state.Windows[0].Path != "docs" {
+		t.Fatalf("state = %#v", state)
 	}
 }
 

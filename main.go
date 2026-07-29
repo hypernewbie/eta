@@ -24,6 +24,7 @@ import (
 
 	"github.com/hypernewbie/eta/internal/bindaddr"
 	"github.com/hypernewbie/eta/internal/hostid"
+	"github.com/hypernewbie/eta/internal/uistate"
 )
 
 //go:embed all:web
@@ -49,6 +50,7 @@ type server struct {
 	web      fs.FS
 	thumbs   *thumbnailCache
 	identity hostid.Identity
+	state    *uistate.Store
 }
 
 type entry struct {
@@ -67,6 +69,7 @@ func main() {
 	thumbnailCacheSize := flag.String("thumbnail-cache-size", "2GB", "maximum thumbnail cache size (for example: 512MB, 2GB)")
 	identityFile := flag.String("identity-file", "", "persistent host identity file (default: user config directory)")
 	accent := flag.String("accent", "", "host accent override (one of Eta's Phi accent names)")
+	stateFile := flag.String("state-file", "", "persistent UI state file (default: user config directory)")
 	flag.Var(&roots, "root", "directory to expose (repeatable; defaults to the current directory)")
 	flag.Parse()
 
@@ -100,6 +103,14 @@ func main() {
 		log.Fatal(err)
 	}
 	s.identity = identity
+	statePath := *stateFile
+	if statePath == "" {
+		statePath, err = uistate.DefaultPath()
+		if err != nil {
+			log.Fatal(err)
+		}
+	}
+	s.state = uistate.New(statePath)
 	cacheDir := *thumbnailCacheDir
 	if cacheDir == "" {
 		cacheDir, err = defaultThumbnailCacheDir()
@@ -190,6 +201,8 @@ func (s *server) routes() http.Handler {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	})
 	mux.HandleFunc("GET /api/identity", s.handleIdentity)
+	mux.HandleFunc("GET /api/state", s.handleStateGet)
+	mux.HandleFunc("PUT /api/state", s.handleStatePut)
 	mux.HandleFunc("GET /api/roots", s.handleRoots)
 	mux.HandleFunc("GET /api/list", s.handleList)
 	mux.HandleFunc("GET /api/preview", s.handlePreview)
@@ -201,6 +214,37 @@ func (s *server) routes() http.Handler {
 
 func (s *server) handleIdentity(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, s.identity)
+}
+
+func (s *server) handleStateGet(w http.ResponseWriter, _ *http.Request) {
+	if s.state == nil {
+		writeError(w, errors.New("UI state is unavailable"))
+		return
+	}
+	state, err := s.state.Load()
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, state)
+}
+
+func (s *server) handleStatePut(w http.ResponseWriter, r *http.Request) {
+	if s.state == nil {
+		writeError(w, errors.New("UI state is unavailable"))
+		return
+	}
+	defer r.Body.Close()
+	var state uistate.State
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 128<<10)).Decode(&state); err != nil {
+		writeError(w, fmt.Errorf("decode UI state: %w", err))
+		return
+	}
+	if err := s.state.Save(state); err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
 func (s *server) handleRoots(w http.ResponseWriter, _ *http.Request) {
