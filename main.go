@@ -29,6 +29,7 @@ import (
 	"github.com/hypernewbie/eta/internal/fileops"
 	"github.com/hypernewbie/eta/internal/hostid"
 	"github.com/hypernewbie/eta/internal/peers"
+	"github.com/hypernewbie/eta/internal/rangecache"
 	"github.com/hypernewbie/eta/internal/remotefile"
 	"github.com/hypernewbie/eta/internal/uistate"
 )
@@ -59,6 +60,7 @@ type server struct {
 	state       *uistate.Store
 	peers       *peers.Store
 	remoteCache *diskcache.Cache
+	hotRanges   *rangecache.Cache
 }
 
 type entry struct {
@@ -81,6 +83,7 @@ func main() {
 	peersFile := flag.String("peers-file", "", "explicit coordinator peer inventory file (default: user config directory)")
 	remoteCacheDir := flag.String("remote-cache-dir", "", "directory for cached remote byte ranges (default: user cache directory)")
 	remoteCacheSize := flag.String("remote-cache-size", "4GB", "maximum remote byte-range cache size")
+	hotRangeCacheSize := flag.String("hot-range-cache-size", "64MB", "maximum RAM used by hot remote ranges")
 	flag.Var(&roots, "root", "directory to expose (repeatable; defaults to the current directory)")
 	flag.Parse()
 
@@ -145,6 +148,11 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	hotRangeBytes, err := parseCacheBytes(*hotRangeCacheSize)
+	if err != nil {
+		log.Fatal(err)
+	}
+	s.hotRanges = rangecache.New(hotRangeBytes)
 	cacheDir := *thumbnailCacheDir
 	if cacheDir == "" {
 		cacheDir, err = defaultThumbnailCacheDir()
@@ -391,7 +399,7 @@ func (s *server) proxyCachedPeerRange(w http.ResponseWriter, r *http.Request, pe
 		return true
 	}
 	source := &remotefile.HTTPSource{BaseURL: peer.URL, Root: rootID, Client: &http.Client{Timeout: 30 * time.Second}}
-	body, info, err := remotefile.ReadCachedRange(r.Context(), s.remoteCache, source, r.URL.Query().Get("path"), start, end-start+1)
+	body, info, err := remotefile.ReadHotCachedRange(r.Context(), s.hotRanges, s.remoteCache, source, r.URL.Query().Get("path"), start, end-start+1)
 	if err != nil {
 		writeError(w, err)
 		return true

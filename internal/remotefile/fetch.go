@@ -6,6 +6,7 @@ import (
 	"io"
 
 	"github.com/hypernewbie/eta/internal/diskcache"
+	"github.com/hypernewbie/eta/internal/rangecache"
 )
 
 // Fetch reads a versioned remote file through a cache. It deliberately has no
@@ -42,6 +43,11 @@ func Fetch(ctx context.Context, cache *diskcache.Cache, source Source, path stri
 // version. A changed size/mtime produces a new key, so stale blocks are never
 // served after a peer updates a file.
 func ReadCachedRange(ctx context.Context, cache *diskcache.Cache, source Source, path string, offset, length int64) ([]byte, Info, error) {
+	return ReadHotCachedRange(ctx, nil, cache, source, path, offset, length)
+}
+
+// ReadHotCachedRange checks a deliberately small RAM LRU before disk.
+func ReadHotCachedRange(ctx context.Context, hot *rangecache.Cache, cache *diskcache.Cache, source Source, path string, offset, length int64) ([]byte, Info, error) {
 	if offset < 0 || length < 0 {
 		return nil, Info{}, fmt.Errorf("invalid range")
 	}
@@ -56,10 +62,18 @@ func ReadCachedRange(ctx context.Context, cache *diskcache.Cache, source Source,
 		length = info.Size - offset
 	}
 	key := fmt.Sprintf("%s\\x00%s\\x00%d\\x00%d", info.Version, path, offset, length)
+	if hot != nil {
+		if body, ok := hot.Get(key); ok {
+			return body, info, nil
+		}
+	}
 	if cache != nil {
 		if body, ok, err := cache.Get(key); err != nil {
 			return nil, Info{}, err
 		} else if ok {
+			if hot != nil {
+				hot.Put(key, body)
+			}
 			return body, info, nil
 		}
 	}
@@ -71,6 +85,9 @@ func ReadCachedRange(ctx context.Context, cache *diskcache.Cache, source Source,
 		if err := cache.Put(key, body); err != nil {
 			return nil, Info{}, err
 		}
+	}
+	if hot != nil {
+		hot.Put(key, body)
 	}
 	return body, info, nil
 }
