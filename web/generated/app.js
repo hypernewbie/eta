@@ -133,14 +133,28 @@ const COLORS = {
         accentBright: "#7bed9f",
     },
 };
-const state = {
-    roots: [],
-    root: 0,
-    path: "",
-    selected: null,
-    rawText: "",
-    view: localStorage.getItem("eta_directory_view") === "grid" ? "grid" : "list",
-};
+let dialogView = null;
+let explorerSequence = 0;
+function createExplorerView(key, panel) {
+    return {
+        key,
+        panel,
+        state: {
+            roots: [],
+            root: 0,
+            path: "",
+            selected: null,
+            rawText: "",
+            view: localStorage.getItem("eta_directory_view") === "grid" ? "grid" : "list",
+        },
+        element: (name) => {
+            const element = panel.querySelector(`[data-explorer="${name}"]`);
+            if (!element)
+                throw new Error(`Missing explorer element: ${name}`);
+            return element;
+        },
+    };
+}
 const $ = (selector) => {
     const element = document.querySelector(selector);
     if (!element)
@@ -246,17 +260,17 @@ function escapeHTML(value) {
     node.textContent = value;
     return node.innerHTML;
 }
-function fileURL(path, download = false) {
-    const params = new URLSearchParams({ root: String(state.root), path });
+function fileURL(root, path, download = false) {
+    const params = new URLSearchParams({ root: String(root), path });
     if (download)
         params.set("download", "1");
     return `/api/file?${params}`;
 }
-function previewURL(path) {
-    return `/api/preview?${new URLSearchParams({ root: String(state.root), path })}`;
+function previewURL(root, path) {
+    return `/api/preview?${new URLSearchParams({ root: String(root), path })}`;
 }
-function thumbnailURL(path, edge = 320) {
-    return `/api/thumbnail?${new URLSearchParams({ root: String(state.root), path, size: String(edge) })}`;
+function thumbnailURL(root, path, edge = 320) {
+    return `/api/thumbnail?${new URLSearchParams({ root: String(root), path, size: String(edge) })}`;
 }
 function extension(name) {
     return name.includes(".")
@@ -275,8 +289,8 @@ function date(value) {
         ? dayjs(value).format("MMM D, YYYY")
         : new Date(value).toLocaleDateString();
 }
-function parentPath() {
-    return state.path.split("/").filter(Boolean).slice(0, -1).join("/");
+function parentPath(view) {
+    return view.state.path.split("/").filter(Boolean).slice(0, -1).join("/");
 }
 async function api(path) {
     const response = await fetch(path);
@@ -295,7 +309,7 @@ const desktopWindows = new Map();
 function refreshTaskStrip() {
     const taskStrip = $("#task-strip");
     taskStrip.innerHTML = [...desktopWindows.entries()]
-        .map(([key, item]) => `<sl-button size="small" class="task-button" data-window="${escapeHTML(key)}"><i data-lucide="${key === "explorer" ? "folder-open" : "file-text"}"></i>${escapeHTML(item.title)}</sl-button>`)
+        .map(([key, item]) => `<sl-button size="small" class="task-button" data-window="${escapeHTML(key)}"><i data-lucide="${key.startsWith("explorer:") ? "folder-open" : "file-text"}"></i>${escapeHTML(item.title)}</sl-button>`)
         .join("");
     iconify();
 }
@@ -309,18 +323,26 @@ function focusDesktopWindow(key) {
 function desktopEnabled() {
     return Boolean(window.WinBox) && document.body.classList.contains("windowed");
 }
-function openExplorerWindow() {
+function createExplorerPanel() {
+    const template = $("#explorer-template");
+    const panel = template.content.firstElementChild?.cloneNode(true);
+    if (!panel)
+        throw new Error("Explorer template is empty");
+    $("#explorer-backstore").append(panel);
+    return panel;
+}
+async function openExplorerWindow() {
     if (!window.WinBox || window.innerWidth < 700)
         return;
-    if (desktopWindows.has("explorer")) {
-        focusDesktopWindow("explorer");
-        return;
-    }
     document.body.classList.add("windowed");
-    let explorer;
-    explorer = new window.WinBox({
-        title: "Explorer",
-        mount: $("#browser-panel"),
+    const number = ++explorerSequence;
+    const key = `explorer:${number}`;
+    const title = number === 1 ? "Explorer" : `Explorer ${number}`;
+    const panel = createExplorerPanel();
+    const view = createExplorerView(key, panel);
+    const explorer = new window.WinBox({
+        title,
+        mount: panel,
         class: "eta-window",
         x: "center",
         y: 64,
@@ -328,25 +350,27 @@ function openExplorerWindow() {
         height: Math.min(820, Math.max(420, Math.floor(window.innerHeight * 0.76))),
         bottom: 40,
         onclose: () => {
-            desktopWindows.delete("explorer");
+            desktopWindows.delete(key);
             refreshTaskStrip();
+            queueMicrotask(() => panel.remove());
         },
         onfocus: refreshTaskStrip,
         onrestore: refreshTaskStrip,
         onminimize: refreshTaskStrip,
     });
-    desktopWindows.set("explorer", { title: "Explorer", window: explorer });
+    desktopWindows.set(key, { title, window: explorer });
     refreshTaskStrip();
+    await initializeExplorer(view);
 }
-function renderBreadcrumbs() {
-    const root = state.roots[state.root];
+function renderBreadcrumbs(view) {
+    const root = view.state.roots[view.state.root];
     const crumbs = [{ name: root?.name || "Root", path: "" }];
     let current = "";
-    for (const part of state.path.split("/").filter(Boolean)) {
+    for (const part of view.state.path.split("/").filter(Boolean)) {
         current = current ? `${current}/${part}` : part;
         crumbs.push({ name: part, path: current });
     }
-    $("#breadcrumbs").innerHTML = crumbs
+    view.element("breadcrumbs").innerHTML = crumbs
         .map((crumb, index) => `${index ? '<i class="crumb-separator" data-lucide="chevron-right"></i>' : ""}<button class="breadcrumb" data-path="${escapeHTML(crumb.path)}">${escapeHTML(crumb.name)}</button>`)
         .join("");
 }
@@ -354,20 +378,22 @@ function entryMarkup(entry) {
     const icon = entry.kind === "directory" ? "folder" : "file";
     return `<button class="entry ${entry.kind}" data-path="${escapeHTML(entry.path)}" data-kind="${entry.kind}" data-size="${entry.size}" data-modified="${entry.modified}"><span class="entry-name-col"><i class="entry-icon" data-lucide="${icon}"></i><span class="entry-name">${escapeHTML(entry.name)}</span></span><span class="entry-meta">${date(entry.modified)}</span><span class="entry-meta">${entry.kind === "directory" ? "—" : bytes(entry.size)}</span></button>`;
 }
-function gridEntryMarkup(entry) {
+function gridEntryMarkup(view, entry) {
     const image = entry.kind === "file" && thumbnailExtensions.has(extension(entry.name));
     const visual = image
-        ? `<img class="thumbnail" loading="lazy" decoding="async" src="${thumbnailURL(entry.path)}" alt="">`
+        ? `<img class="thumbnail" loading="lazy" decoding="async" src="${thumbnailURL(view.state.root, entry.path)}" alt="">`
         : `<span class="grid-icon"><i data-lucide="${entry.kind === "directory" ? "folder" : "file"}"></i></span>`;
     return `<button class="entry grid-entry ${entry.kind}" data-path="${escapeHTML(entry.path)}" data-kind="${entry.kind}" data-size="${entry.size}" data-modified="${entry.modified}">${visual}<span class="grid-name">${escapeHTML(entry.name)}</span><span class="grid-meta">${entry.kind === "directory" ? "Folder" : bytes(entry.size)}</span></button>`;
 }
-function renderEntries(entries) {
-    $("#item-count").textContent =
+function renderEntries(view, entries) {
+    view.element("item-count").textContent =
         `${entries.length} ${entries.length === 1 ? "item" : "items"}`;
-    const container = $("#entries");
-    $("#file-table").classList.toggle("grid-view", state.view === "grid");
-    container.classList.toggle("image-grid", state.view === "grid");
-    const parent = state.path
+    const container = view.element("entries");
+    view
+        .element("file-table")
+        .classList.toggle("grid-view", view.state.view === "grid");
+    container.classList.toggle("image-grid", view.state.view === "grid");
+    const parent = view.state.path
         ? '<button class="entry parent" data-parent="true"><span class="entry-name-col"><i class="entry-icon" data-lucide="corner-left-up"></i><span class="entry-name">..</span></span><span class="entry-meta">Parent folder</span><span class="entry-meta">—</span></button>'
         : "";
     if (!entries.length) {
@@ -375,32 +401,34 @@ function renderEntries(entries) {
         iconify();
         return;
     }
-    const renderer = state.view === "grid" ? gridEntryMarkup : entryMarkup;
+    const renderer = view.state.view === "grid"
+        ? (entry) => gridEntryMarkup(view, entry)
+        : entryMarkup;
     container.innerHTML = parent + entries.map(renderer).join("");
     iconify();
 }
-async function navigate(path = "") {
-    state.path = path;
-    $("#entries").innerHTML =
+async function navigate(view, path = "") {
+    view.state.path = path;
+    view.element("entries").innerHTML =
         '<div class="empty"><sl-spinner></sl-spinner></div>';
-    renderBreadcrumbs();
+    renderBreadcrumbs(view);
     iconify();
     try {
-        const result = await api(`/api/list?${new URLSearchParams({ root: String(state.root), path })}`);
+        const result = await api(`/api/list?${new URLSearchParams({ root: String(view.state.root), path })}`);
         if (result.entry && result.entry.kind !== "directory") {
-            await preview(result.entry);
+            await preview(view, result.entry);
             return;
         }
-        renderBreadcrumbs();
-        renderEntries(result.entries || []);
+        renderBreadcrumbs(view);
+        renderEntries(view, result.entries || []);
     }
     catch (error) {
         showToast(error.message);
-        renderEntries([]);
+        renderEntries(view, []);
     }
 }
-async function loadText(entry) {
-    const result = await api(previewURL(entry.path));
+async function loadText(view, entry) {
+    const result = await api(previewURL(view.state.root, entry.path));
     if (result.binary)
         return { text: "", binary: true, truncated: result.truncated };
     return result;
@@ -424,13 +452,13 @@ function renderText(raw, truncated, ext) {
     const [prismLanguage, label] = language;
     return `<section class="code-inspector"><header class="code-toolbar"><span>${label}</span><span>${truncated ? "preview truncated at 512 KB" : ""}</span></header><pre class="preview-text line-numbers language-${prismLanguage}"><code class="language-${prismLanguage}">${escapeHTML(raw)}</code></pre></section>`;
 }
-async function renderPreview(entry, container) {
+async function renderPreview(view, entry, container) {
     container.innerHTML = '<div class="empty"><sl-spinner></sl-spinner></div>';
     let rawText = "";
     let binary = true;
     try {
         const ext = extension(entry.name);
-        const source = fileURL(entry.path);
+        const source = fileURL(view.state.root, entry.path);
         let content = fileFacts(entry);
         if (imageExtensions.has(ext))
             content += `<img class="preview-image" alt="${escapeHTML(entry.name)}" src="${source}">`;
@@ -441,7 +469,7 @@ async function renderPreview(entry, container) {
         else if (ext === "pdf")
             content += `<iframe class="pdf-preview" title="${escapeHTML(entry.name)}" src="${source}"></iframe>`;
         else {
-            const result = await loadText(entry);
+            const result = await loadText(view, entry);
             rawText = result.text || "";
             binary = result.binary;
             content += result.binary
@@ -464,11 +492,11 @@ async function renderPreview(entry, container) {
     }
     return { rawText, binary };
 }
-async function openInspector(entry) {
+async function openInspector(view, entry) {
     const WinBox = window.WinBox;
     if (!WinBox)
         return;
-    const key = `file:${state.root}:${entry.path}`;
+    const key = `file:${view.state.root}:${entry.path}`;
     if (desktopWindows.has(key)) {
         focusDesktopWindow(key);
         return;
@@ -501,7 +529,7 @@ async function openInspector(entry) {
     });
     desktopWindows.set(key, { title: entry.name, window: inspector });
     refreshTaskStrip();
-    const result = await renderPreview(entry, content);
+    const result = await renderPreview(view, entry, content);
     const copy = actions.querySelector(".inspector-copy");
     copy.disabled = result.binary;
     copy.addEventListener("click", async () => {
@@ -518,96 +546,112 @@ async function openInspector(entry) {
     actions
         .querySelector(".inspector-download")
         ?.addEventListener("click", () => {
-        window.open(fileURL(entry.path, true), "_blank", "noopener");
+        window.open(fileURL(view.state.root, entry.path, true), "_blank", "noopener");
     });
 }
-async function preview(entry) {
-    state.selected = entry;
-    state.rawText = "";
+async function preview(view, entry) {
+    view.state.selected = entry;
+    view.state.rawText = "";
     if (desktopEnabled()) {
-        await openInspector(entry);
+        await openInspector(view, entry);
         return;
     }
     $("#preview-dialog").label = entry.name;
     $("#copy-button").disabled = true;
     $("#preview-dialog").show();
-    const result = await renderPreview(entry, $("#preview-content"));
-    state.rawText = result.rawText;
+    dialogView = view;
+    const result = await renderPreview(view, entry, $("#preview-content"));
+    view.state.rawText = result.rawText;
     $("#copy-button").disabled = result.binary;
 }
 async function copyText() {
-    if (!state.rawText)
+    if (!dialogView?.state.rawText)
         return;
     try {
-        await navigator.clipboard.writeText(state.rawText);
+        await navigator.clipboard.writeText(dialogView.state.rawText);
         showToast("Copied text", "success");
     }
     catch {
         showToast("Clipboard access was denied");
     }
 }
-async function boot() {
-    setTheme(localStorage.getItem("eta_theme_color") || "purple");
-    $("#view-toggle").title =
-        state.view === "grid" ? "Use detailed list" : "Use image grid";
+function bindExplorer(view) {
+    view.element("root-select").addEventListener("change", (event) => {
+        view.state.root = Number(event.target.value);
+        navigate(view);
+    });
+    view
+        .element("refresh-button")
+        .addEventListener("click", () => navigate(view, view.state.path));
+    view.element("view-toggle").addEventListener("click", () => {
+        view.state.view = view.state.view === "list" ? "grid" : "list";
+        localStorage.setItem("eta_directory_view", view.state.view);
+        view.element("view-toggle").title =
+            view.state.view === "grid" ? "Use detailed list" : "Use image grid";
+        navigate(view, view.state.path);
+    });
+    view
+        .element("up-button")
+        .addEventListener("click", () => navigate(view, parentPath(view)));
+    view.element("breadcrumbs").addEventListener("click", (event) => {
+        const button = event.target.closest("[data-path]");
+        if (button)
+            navigate(view, button.dataset.path);
+    });
+    view.element("entries").addEventListener("click", (event) => {
+        const row = event.target.closest(".entry");
+        if (!row)
+            return;
+        if (row.dataset.parent) {
+            navigate(view, parentPath(view));
+            return;
+        }
+        const item = {
+            path: row.dataset.path || "",
+            name: row.querySelector(".entry-name, .grid-name")?.textContent || "",
+            kind: row.dataset.kind,
+            size: Number(row.dataset.size),
+            modified: row.dataset.modified || "",
+        };
+        item.kind === "directory" ? navigate(view, item.path) : preview(view, item);
+    });
+}
+async function initializeExplorer(view) {
+    bindExplorer(view);
+    view.element("view-toggle").title =
+        view.state.view === "grid" ? "Use detailed list" : "Use image grid";
     try {
-        state.roots = await api("/api/roots");
-        $("#root-select").innerHTML = state.roots
+        view.state.roots = await api("/api/roots");
+        view.element("root-select").innerHTML = view.state.roots
             .map((root) => `<option value="${root.id}">${escapeHTML(root.name)}</option>`)
             .join("");
-        await navigate();
+        await navigate(view);
     }
     catch (error) {
         $("#server-status").textContent = "OFFLINE";
         showToast(error.message);
     }
-    openExplorerWindow();
+}
+async function boot() {
+    setTheme(localStorage.getItem("eta_theme_color") || "purple");
+    if (window.WinBox && window.innerWidth >= 700) {
+        await openExplorerWindow();
+    }
+    else {
+        const view = createExplorerView("fallback", createExplorerPanel());
+        await initializeExplorer(view);
+    }
     iconify();
 }
-$("#eta-launcher").addEventListener("click", openExplorerWindow);
+$("#eta-launcher").addEventListener("click", () => void openExplorerWindow());
 $("#task-strip").addEventListener("click", (event) => {
     const button = event.target.closest("[data-window]");
     if (button)
-        focusDesktopWindow(button.dataset.window);
-});
-$("#root-select").addEventListener("change", (event) => {
-    state.root = Number(event.target.value);
-    navigate();
-});
-$("#refresh-button").addEventListener("click", () => navigate(state.path));
-$("#view-toggle").addEventListener("click", () => {
-    state.view = state.view === "list" ? "grid" : "list";
-    localStorage.setItem("eta_directory_view", state.view);
-    $("#view-toggle").title =
-        state.view === "grid" ? "Use detailed list" : "Use image grid";
-    navigate(state.path);
-});
-$("#up-button").addEventListener("click", () => navigate(parentPath()));
-$("#breadcrumbs").addEventListener("click", (event) => {
-    const button = event.target.closest("[data-path]");
-    if (button)
-        navigate(button.dataset.path);
-});
-$("#entries").addEventListener("click", (event) => {
-    const row = event.target.closest(".entry");
-    if (!row)
-        return;
-    if (row.dataset.parent) {
-        navigate(parentPath());
-        return;
-    }
-    const item = {
-        path: row.dataset.path,
-        name: row.querySelector(".entry-name, .grid-name")?.textContent || "",
-        kind: row.dataset.kind,
-        size: Number(row.dataset.size),
-        modified: row.dataset.modified,
-    };
-    item.kind === "directory" ? navigate(item.path) : preview(item);
+        focusDesktopWindow(button.dataset.window || "");
 });
 $("#download-button").addEventListener("click", () => {
-    if (state.selected)
-        window.open(fileURL(state.selected.path, true), "_blank", "noopener");
+    if (dialogView?.state.selected)
+        window.open(fileURL(dialogView.state.root, dialogView.state.selected.path, true), "_blank", "noopener");
 });
 $("#copy-button").addEventListener("click", copyText);
 $("#close-dialog").addEventListener("click", () => $("#preview-dialog").hide());
@@ -619,11 +663,11 @@ $("#swatches").addEventListener("click", (event) => {
     const button = event.target.closest("[data-theme]");
     if (!button)
         return;
-    setTheme(button.dataset.theme);
+    setTheme(button.dataset.theme || "purple");
     $("#theme-dialog").hide();
 });
 document.addEventListener("keydown", (event) => {
     if (event.key === "Escape" && $("#preview-dialog").open)
         $("#preview-dialog").hide();
 });
-boot();
+void boot();

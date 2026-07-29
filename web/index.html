@@ -62,46 +62,60 @@
         </button>
       </header>
 
-      <div id="explorer-backstore">
-        <section
-          id="browser-panel"
-          class="browser-panel"
-          aria-label="Filesystem browser"
-        >
+      <div id="explorer-backstore"></div>
+      <template id="explorer-template">
+        <section class="browser-panel" aria-label="Filesystem browser">
           <div class="toolbar">
             <label class="root-picker"
               ><i data-lucide="hard-drive"></i
-              ><select id="root-select" aria-label="Filesystem root"></select
+              ><select
+                data-explorer="root-select"
+                aria-label="Filesystem root"
+              ></select
               ><i data-lucide="chevron-down" class="chevron"></i
             ></label>
             <nav
               class="breadcrumbs"
-              id="breadcrumbs"
+              data-explorer="breadcrumbs"
               aria-label="Breadcrumb"
             ></nav>
             <div class="toolbar-actions">
               <button
                 class="icon-button"
-                id="view-toggle"
+                data-explorer="view-toggle"
                 title="Toggle image grid"
               >
                 <i data-lucide="layout-grid"></i></button
-              ><button class="icon-button" id="up-button" title="Up one folder">
+              ><button
+                class="icon-button"
+                data-explorer="up-button"
+                title="Up one folder"
+              >
                 <i data-lucide="arrow-up"></i></button
-              ><button class="icon-button" id="refresh-button" title="Refresh">
+              ><button
+                class="icon-button"
+                data-explorer="refresh-button"
+                title="Refresh"
+              >
                 <i data-lucide="refresh-cw"></i>
               </button>
             </div>
           </div>
-          <div class="file-table" id="file-table">
+          <div class="file-table" data-explorer="file-table">
             <div class="table-head">
               <span>Name</span><span>Modified</span><span>Size</span>
             </div>
-            <div id="entries" class="entries" aria-live="polite"></div>
+            <div
+              data-explorer="entries"
+              class="entries"
+              aria-live="polite"
+            ></div>
           </div>
-          <footer class="panel-footer"><span id="item-count">—</span></footer>
+          <footer class="panel-footer">
+            <span data-explorer="item-count">—</span>
+          </footer>
         </section>
-      </div>
+      </template>
     </main>
     <nav id="taskbar" class="taskbar" aria-label="Desktop taskbar">
       <button

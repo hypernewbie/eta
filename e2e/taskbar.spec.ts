@@ -21,8 +21,9 @@ test("taskbar closes and reopens Explorer", async ({ page }) => {
   await expect(page.locator("#task-strip")).not.toContainText("Explorer");
 
   await page.locator("#eta-launcher").click();
-  await expect(page.locator(".winbox.eta-window")).toHaveCount(1);
-  await expect(page.locator(".winbox.eta-window")).toContainText(
-    "Filesystem root",
-  );
+  const reopened = page.locator(".winbox.eta-window");
+  await expect(reopened).toHaveCount(1);
+  await expect(
+    reopened.locator('select[aria-label="Filesystem root"]'),
+  ).toBeVisible();
 });
