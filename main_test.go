@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -21,6 +22,29 @@ func TestMediaTypes(t *testing.T) {
 		if got := mediaType(name); got != want {
 			t.Errorf("mediaType(%q) = %q, want %q", name, got, want)
 		}
+	}
+}
+
+func TestRemoteListProxyUsesEnrolledPeer(t *testing.T) {
+	peerServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/list" || r.URL.Query().Get("path") != "docs" {
+			t.Fatalf("request = %s", r.URL.String())
+		}
+		_, _ = w.Write([]byte(`{"entries":[]}`))
+	}))
+	defer peerServer.Close()
+	s, err := newServer([]string{t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.peers = peers.New(filepath.Join(t.TempDir(), "peers.json"))
+	if err := s.peers.Add(peers.Peer{URL: peerServer.URL}); err != nil {
+		t.Fatal(err)
+	}
+	response := httptest.NewRecorder()
+	s.routes().ServeHTTP(response, httptest.NewRequest("GET", "/api/remote/list?peer="+url.QueryEscape(peerServer.URL)+"&root=0&path=docs", nil))
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d", response.Code)
 	}
 }
 
