@@ -862,6 +862,9 @@ function bindExplorer(view: ExplorerView) {
       },
     };
     const menu = $("#file-context-menu");
+    (
+      menu.querySelector('[data-file-action="trusted-html"]') as HTMLElement
+    ).hidden = !htmlExtensions.has(extension(contextEntry.entry.name));
     menu.style.left = `${event.clientX}px`;
     menu.style.top = `${event.clientY}px`;
     menu.hidden = false;
@@ -972,6 +975,14 @@ $("#file-context-menu").addEventListener("click", async (event) => {
   contextEntry = null;
   if (!action || !target) return;
   try {
+    if (action.dataset.fileAction === "trusted-html") {
+      window.open(
+        fileURL(target.view.state.root, target.entry.path),
+        "_blank",
+        "noopener",
+      );
+      return;
+    }
     if (action.dataset.fileAction === "rename") {
       const next = window.prompt("Rename to:", target.entry.name);
       if (!next || next === target.entry.name) return;
