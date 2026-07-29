@@ -7,11 +7,11 @@
       content="width=device-width,initial-scale=1,viewport-fit=cover"
     />
     <meta name="color-scheme" content="dark" />
-    <title>η eta — Archive</title>
+    <title>η eta</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
-      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&family=Marcellus&display=swap"
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap"
       rel="stylesheet"
     />
     <link
@@ -19,6 +19,10 @@
       href="https://cdn.jsdelivr.net/npm/@shoelace-style/shoelace@2.20.1/cdn/themes/dark.css"
     />
     <link rel="stylesheet" href="vendor/highlight-github-dark.min.css" />
+    <link
+      rel="stylesheet"
+      href="https://cdn.jsdelivr.net/npm/winbox@0.2.82/dist/css/winbox.min.css"
+    />
     <link
       rel="stylesheet"
       href="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/line-numbers/prism-line-numbers.css"
@@ -36,6 +40,7 @@
     <script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/prism.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/autoloader/prism-autoloader.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/line-numbers/prism-line-numbers.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/winbox@0.2.82/dist/winbox.bundle.min.js"></script>
   </head>
   <body class="sl-theme-dark">
     <main class="app-shell">
@@ -57,41 +62,58 @@
         </button>
       </header>
 
-      <section class="browser-panel" aria-label="Filesystem browser">
-        <div class="toolbar">
-          <label class="root-picker"
-            ><i data-lucide="hard-drive"></i
-            ><select id="root-select" aria-label="Filesystem root"></select
-            ><i data-lucide="chevron-down" class="chevron"></i
-          ></label>
-          <nav
-            class="breadcrumbs"
-            id="breadcrumbs"
-            aria-label="Breadcrumb"
-          ></nav>
-          <div class="toolbar-actions">
-            <button
-              class="icon-button"
-              id="view-toggle"
-              title="Toggle image grid"
-            >
-              <i data-lucide="layout-grid"></i></button
-            ><button class="icon-button" id="up-button" title="Up one folder">
-              <i data-lucide="arrow-up"></i></button
-            ><button class="icon-button" id="refresh-button" title="Refresh">
-              <i data-lucide="refresh-cw"></i>
-            </button>
+      <div id="explorer-backstore">
+        <section
+          id="browser-panel"
+          class="browser-panel"
+          aria-label="Filesystem browser"
+        >
+          <div class="toolbar">
+            <label class="root-picker"
+              ><i data-lucide="hard-drive"></i
+              ><select id="root-select" aria-label="Filesystem root"></select
+              ><i data-lucide="chevron-down" class="chevron"></i
+            ></label>
+            <nav
+              class="breadcrumbs"
+              id="breadcrumbs"
+              aria-label="Breadcrumb"
+            ></nav>
+            <div class="toolbar-actions">
+              <button
+                class="icon-button"
+                id="view-toggle"
+                title="Toggle image grid"
+              >
+                <i data-lucide="layout-grid"></i></button
+              ><button class="icon-button" id="up-button" title="Up one folder">
+                <i data-lucide="arrow-up"></i></button
+              ><button class="icon-button" id="refresh-button" title="Refresh">
+                <i data-lucide="refresh-cw"></i>
+              </button>
+            </div>
           </div>
-        </div>
-        <div class="file-table" id="file-table">
-          <div class="table-head">
-            <span>Name</span><span>Modified</span><span>Size</span>
+          <div class="file-table" id="file-table">
+            <div class="table-head">
+              <span>Name</span><span>Modified</span><span>Size</span>
+            </div>
+            <div id="entries" class="entries" aria-live="polite"></div>
           </div>
-          <div id="entries" class="entries" aria-live="polite"></div>
-        </div>
-        <footer class="panel-footer"><span id="item-count">—</span></footer>
-      </section>
+          <footer class="panel-footer"><span id="item-count">—</span></footer>
+        </section>
+      </div>
     </main>
+    <nav id="taskbar" class="taskbar" aria-label="Desktop taskbar">
+      <button
+        id="eta-launcher"
+        class="eta-launcher"
+        title="Open Explorer"
+        aria-label="Open Explorer"
+      >
+        <span aria-hidden="true">η</span>
+      </button>
+      <div id="task-strip" class="task-strip" aria-label="Open windows"></div>
+    </nav>
 
     <sl-dialog id="preview-dialog" label="File preview" class="preview-dialog"
       ><div id="preview-content"></div>

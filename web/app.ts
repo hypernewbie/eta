@@ -5,7 +5,29 @@ interface Window {
   DOMPurify?: any;
   hljs?: any;
   Prism?: any;
+  WinBox?: new (options: WinBoxOptions) => WinBoxInstance;
 }
+
+type WinBoxOptions = {
+  title: string;
+  mount: HTMLElement;
+  x?: number | "center";
+  y?: number | "center";
+  width?: number;
+  height?: number;
+  bottom?: number;
+  class?: string;
+  close?: boolean;
+  onclose?: () => boolean | void;
+  onfocus?: () => void;
+  onrestore?: () => void;
+  onminimize?: () => void;
+};
+type WinBoxInstance = {
+  focus: () => void;
+  restore: () => void;
+  minimize: () => void;
+};
 
 declare const dayjs: any;
 
@@ -332,6 +354,57 @@ function showToast(message, variant = "danger") {
   alert.toast();
 }
 
+type DesktopWindow = { title: string; window: WinBoxInstance };
+const desktopWindows = new Map<string, DesktopWindow>();
+
+function refreshTaskStrip() {
+  const taskStrip = $("#task-strip");
+  taskStrip.innerHTML = [...desktopWindows.entries()]
+    .map(
+      ([key, item]) =>
+        `<sl-button size="small" class="task-button" data-window="${escapeHTML(key)}"><i data-lucide="${key === "explorer" ? "folder-open" : "file-text"}"></i>${escapeHTML(item.title)}</sl-button>`,
+    )
+    .join("");
+  iconify();
+}
+function focusDesktopWindow(key: string) {
+  const item = desktopWindows.get(key);
+  if (!item) return;
+  item.window.restore();
+  item.window.focus();
+}
+function desktopEnabled() {
+  return Boolean(window.WinBox) && document.body.classList.contains("windowed");
+}
+function openExplorerWindow() {
+  if (!window.WinBox || window.innerWidth < 700) return;
+  if (desktopWindows.has("explorer")) {
+    focusDesktopWindow("explorer");
+    return;
+  }
+  document.body.classList.add("windowed");
+  let explorer: WinBoxInstance;
+  explorer = new window.WinBox({
+    title: "Explorer",
+    mount: $("#browser-panel"),
+    class: "eta-window",
+    x: "center",
+    y: 64,
+    width: Math.min(1240, Math.max(640, Math.floor(window.innerWidth * 0.86))),
+    height: Math.min(820, Math.max(420, Math.floor(window.innerHeight * 0.76))),
+    bottom: 40,
+    onclose: () => {
+      desktopWindows.delete("explorer");
+      refreshTaskStrip();
+    },
+    onfocus: refreshTaskStrip,
+    onrestore: refreshTaskStrip,
+    onminimize: refreshTaskStrip,
+  });
+  desktopWindows.set("explorer", { title: "Explorer", window: explorer });
+  refreshTaskStrip();
+}
+
 function renderBreadcrumbs() {
   const root = state.roots[state.root];
   const crumbs = [{ name: root?.name || "Root", path: "" }];
@@ -405,7 +478,6 @@ async function loadText(entry) {
   const result = await api(previewURL(entry.path));
   if (result.binary)
     return { text: "", binary: true, truncated: result.truncated };
-  state.rawText = result.text || "";
   return result;
 }
 function fileFacts(entry) {
@@ -428,14 +500,10 @@ function renderText(raw, truncated, ext) {
   return `<section class="code-inspector"><header class="code-toolbar"><span>${label}</span><span>${truncated ? "preview truncated at 512 KB" : ""}</span></header><pre class="preview-text line-numbers language-${prismLanguage}"><code class="language-${prismLanguage}">${escapeHTML(raw)}</code></pre></section>`;
 }
 
-async function preview(entry) {
-  state.selected = entry;
-  state.rawText = "";
-  $("#preview-dialog").label = entry.name;
-  $("#copy-button").disabled = true;
-  $("#preview-content").innerHTML =
-    '<div class="empty"><sl-spinner></sl-spinner></div>';
-  $("#preview-dialog").show();
+async function renderPreview(entry: Entry, container: HTMLElement) {
+  container.innerHTML = '<div class="empty"><sl-spinner></sl-spinner></div>';
+  let rawText = "";
+  let binary = true;
   try {
     const ext = extension(entry.name);
     const source = fileURL(entry.path);
@@ -450,25 +518,96 @@ async function preview(entry) {
       content += `<iframe class="pdf-preview" title="${escapeHTML(entry.name)}" src="${source}"></iframe>`;
     else {
       const result = await loadText(entry);
+      rawText = result.text || "";
+      binary = result.binary;
       content += result.binary
         ? '<p class="preview-note">This looks like a binary file. Download it to inspect it locally.</p>'
         : markdownExtensions.has(ext)
-          ? renderMarkdown(result.text || "", result.truncated)
-          : renderText(result.text || "", result.truncated, ext);
-      $("#copy-button").disabled = result.binary;
+          ? renderMarkdown(rawText, result.truncated)
+          : renderText(rawText, result.truncated, ext);
     }
-    $("#preview-content").innerHTML = content;
-    $("#preview-content")
+    container.innerHTML = content;
+    container
       .querySelectorAll(".markdown-preview pre code")
       .forEach((block) => window.hljs?.highlightElement(block));
-    $("#preview-content")
+    container
       .querySelectorAll(".code-inspector code")
       .forEach((block) => window.Prism?.highlightElement(block));
     iconify();
   } catch (error) {
-    $("#preview-content").innerHTML =
-      `<p class="preview-note">${escapeHTML(error.message)}</p>`;
+    container.innerHTML = `<p class="preview-note">${escapeHTML(error.message)}</p>`;
   }
+  return { rawText, binary };
+}
+
+async function openInspector(entry: Entry) {
+  const WinBox = window.WinBox;
+  if (!WinBox) return;
+  const key = `file:${state.root}:${entry.path}`;
+  if (desktopWindows.has(key)) {
+    focusDesktopWindow(key);
+    return;
+  }
+  const panel = document.createElement("section");
+  panel.className = "inspector-window";
+  const content = document.createElement("div");
+  content.className = "inspector-content";
+  const actions = document.createElement("footer");
+  actions.className = "inspector-actions";
+  actions.innerHTML =
+    '<sl-button class="inspector-copy" disabled><i data-lucide="copy"></i> Copy text</sl-button><sl-button class="inspector-download" variant="primary"><i data-lucide="download"></i> Download</sl-button>';
+  panel.append(content, actions);
+  const inspector = new WinBox({
+    title: entry.name,
+    mount: panel,
+    class: "eta-window",
+    x: "center",
+    y: "center",
+    width: Math.min(1180, window.innerWidth - 64),
+    height: Math.min(820, window.innerHeight - 120),
+    bottom: 40,
+    onclose: () => {
+      desktopWindows.delete(key);
+      refreshTaskStrip();
+    },
+    onfocus: refreshTaskStrip,
+    onrestore: refreshTaskStrip,
+    onminimize: refreshTaskStrip,
+  });
+  desktopWindows.set(key, { title: entry.name, window: inspector });
+  refreshTaskStrip();
+  const result = await renderPreview(entry, content);
+  const copy = actions.querySelector(".inspector-copy") as any;
+  copy.disabled = result.binary;
+  copy.addEventListener("click", async () => {
+    if (!result.rawText) return;
+    try {
+      await navigator.clipboard.writeText(result.rawText);
+      showToast("Copied text", "success");
+    } catch {
+      showToast("Clipboard access was denied");
+    }
+  });
+  actions
+    .querySelector(".inspector-download")
+    ?.addEventListener("click", () => {
+      window.open(fileURL(entry.path, true), "_blank", "noopener");
+    });
+}
+
+async function preview(entry: Entry) {
+  state.selected = entry;
+  state.rawText = "";
+  if (desktopEnabled()) {
+    await openInspector(entry);
+    return;
+  }
+  $("#preview-dialog").label = entry.name;
+  $("#copy-button").disabled = true;
+  $("#preview-dialog").show();
+  const result = await renderPreview(entry, $("#preview-content"));
+  state.rawText = result.rawText;
+  $("#copy-button").disabled = result.binary;
 }
 
 async function copyText() {
@@ -498,9 +637,15 @@ async function boot() {
     $("#server-status").textContent = "OFFLINE";
     showToast(error.message);
   }
+  openExplorerWindow();
   iconify();
 }
 
+$("#eta-launcher").addEventListener("click", openExplorerWindow);
+$("#task-strip").addEventListener("click", (event) => {
+  const button = event.target.closest("[data-window]");
+  if (button) focusDesktopWindow(button.dataset.window);
+});
 $("#root-select").addEventListener("change", (event) => {
   state.root = Number(event.target.value);
   navigate();

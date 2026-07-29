@@ -15,4 +15,7 @@ coverage.txt
 
 # Optional frontend tooling output
 node_modules/
+test-results/
+playwright-report/
+blob-report/
 *.tsbuildinfo

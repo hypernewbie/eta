@@ -1,19 +1,25 @@
 :root {
+  /* Phi's obsidian palette and typography. */
   --bg-base: #08080a;
-  --bg-panel: rgba(13, 13, 16, 0.72);
+  --bg-panel: #0d0d10;
   --bg-elevated: #141418;
-  --bg-border: #26252f;
+  --bg-border: #1f1f26;
   --accent: #7c6af7;
+  --accent-glow: rgba(124, 106, 247, 0.15);
   --accent-dim: #5b4ec2;
   --accent-bright: #9a8dfa;
-  --accent-glow: rgba(124, 106, 247, 0.16);
+  --accent-edge: color-mix(in srgb, var(--accent) 35%, transparent);
+  --accent-soft: color-mix(in srgb, var(--accent) 22%, transparent);
+  --accent-wash: color-mix(in srgb, var(--accent) 10%, transparent);
+  --accent-trace: color-mix(in srgb, var(--accent) 6%, transparent);
   --text-primary: #e4e3e9;
-  --text-muted: #9693a6;
-  --text-dim: #545161;
+  --text-muted: #78768a;
+  --text-dim: #424052;
   --green: #38bdf8;
-  --font-ui: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  --font-display: Marcellus, serif;
-  --font-mono: "JetBrains Mono", monospace;
+  --green-glow: rgba(56, 189, 248, 0.2);
+  --font-ui:
+    "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  --font-mono: "JetBrains Mono", "Courier New", Courier, monospace;
 }
 * {
   box-sizing: border-box;
@@ -22,25 +28,43 @@ html,
 body {
   margin: 0;
   min-height: 100%;
-  background: radial-gradient(
-    ellipse 60% 45% at 50% -10%,
-    #252035 0%,
-    var(--bg-base) 70%
-  );
+  background: radial-gradient(circle at 50% 0%, #16161c 0%, var(--bg-base) 70%);
   color: var(--text-primary);
   font-family: var(--font-ui);
 }
-body::before {
+body::before,
+body::after {
   content: "";
   position: fixed;
   inset: 0;
   pointer-events: none;
-  opacity: 0.38;
+}
+body::before {
+  opacity: 0.28;
   background-image:
     linear-gradient(rgba(255, 255, 255, 0.018) 1px, transparent 1px),
     linear-gradient(90deg, rgba(255, 255, 255, 0.018) 1px, transparent 1px);
   background-size: 32px 32px;
   mask-image: linear-gradient(to bottom, black, transparent 70%);
+}
+body::after {
+  opacity: 0.34;
+  background:
+    radial-gradient(circle at 50% -10%, var(--accent-soft), transparent 31%),
+    linear-gradient(
+      135deg,
+      transparent 49.75%,
+      var(--accent-trace) 50%,
+      transparent 50.25%
+    );
+  background-size:
+    auto,
+    84px 84px;
+  mask-image: radial-gradient(
+    ellipse 72% 52% at 50% 0%,
+    black,
+    transparent 75%
+  );
 }
 button,
 select {
@@ -57,11 +81,15 @@ button {
   padding: 0 0 40px;
 }
 .app-header {
-  height: 60px;
+  height: 48px;
   display: flex;
   align-items: center;
-  gap: 18px;
-  border-bottom: 1px solid color-mix(in srgb, var(--bg-border) 78%, transparent);
+  gap: 14px;
+  border-bottom: 1px solid var(--bg-border);
+  background: rgba(13, 13, 16, 0.65);
+  box-shadow: inset 0 -1px 0 var(--accent-trace);
+  backdrop-filter: blur(20px) saturate(180%);
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
 }
 .brand {
   display: flex;
@@ -74,14 +102,16 @@ button {
 .sigil {
   color: var(--accent);
   font-family: var(--font-mono);
-  font-weight: 500;
-  font-size: 31px;
-  text-shadow: 0 0 18px var(--accent);
+  font-weight: 600;
+  font-size: 24px;
+  text-shadow: 0 0 10px var(--accent-glow);
   line-height: 1;
 }
 .wordmark {
-  font-family: var(--font-display);
-  font-size: 21px;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-weight: 500;
+  letter-spacing: 0.12em;
 }
 .header-status {
   margin-left: auto;
@@ -129,23 +159,24 @@ button {
   border: 1px solid var(--bg-border);
   border-radius: 14px;
   overflow: hidden;
-  background: linear-gradient(
-    135deg,
-    rgba(24, 23, 29, 0.79),
-    rgba(10, 10, 13, 0.86)
-  );
+  background:
+    linear-gradient(135deg, rgba(20, 20, 26, 0.88), rgba(8, 8, 10, 0.93)),
+    var(--bg-panel);
   box-shadow:
     0 20px 70px rgba(0, 0, 0, 0.3),
-    inset 0 1px rgba(255, 255, 255, 0.025);
-  backdrop-filter: blur(20px) saturate(140%);
+    inset 0 1px 0 var(--accent-trace),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.45);
+  backdrop-filter: blur(20px) saturate(160%);
 }
 .toolbar {
-  min-height: 57px;
+  min-height: 53px;
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 10px 13px;
+  padding: 9px 13px;
   border-bottom: 1px solid var(--bg-border);
+  background: linear-gradient(90deg, var(--accent-trace), transparent 42%);
+  box-shadow: inset 0 -1px 0 rgba(0, 0, 0, 0.3);
 }
 .root-picker {
   position: relative;
@@ -725,6 +756,200 @@ button {
 }
 .image-grid .entry.parent .entry-meta {
   display: none;
+}
+/* WinBox provides the window behavior; these only apply Eta's existing tokens. */
+.taskbar {
+  position: fixed;
+  z-index: 10000;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  display: none;
+  height: 40px;
+  align-items: stretch;
+  border-top: 1px solid var(--bg-border);
+  background:
+    linear-gradient(90deg, var(--accent-trace), transparent 26%),
+    rgba(10, 10, 13, 0.92);
+  box-shadow:
+    0 -10px 28px rgba(0, 0, 0, 0.32),
+    inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  backdrop-filter: blur(18px) saturate(160%);
+}
+.windowed .taskbar {
+  display: flex;
+}
+.eta-launcher {
+  width: 48px;
+  flex: 0 0 48px;
+  border: 0;
+  border-right: 1px solid var(--bg-border);
+  background: transparent;
+  color: var(--accent-bright);
+  font: 600 22px var(--font-mono);
+  text-shadow: 0 0 12px var(--accent-soft);
+}
+.eta-launcher:hover {
+  background: var(--accent-wash);
+}
+.task-strip {
+  display: flex;
+  min-width: 0;
+  gap: 2px;
+  padding: 3px 4px;
+  overflow-x: auto;
+}
+.task-button {
+  width: 176px;
+  flex: 0 0 176px;
+}
+.task-button::part(base) {
+  width: 100%;
+  min-height: 32px;
+  justify-content: flex-start;
+  overflow: hidden;
+  border: 1px solid transparent;
+  border-radius: 3px;
+  background: transparent;
+  color: var(--text-muted);
+  font: 11px var(--font-mono);
+  text-align: left;
+}
+.task-button:hover::part(base),
+.task-button:focus-visible::part(base) {
+  border-color: color-mix(in srgb, var(--accent) 32%, transparent);
+  background: var(--accent-wash);
+  color: var(--accent-bright);
+}
+.task-button i {
+  width: 13px;
+  flex: 0 0 auto;
+  margin-right: 6px;
+}
+.windowed .app-shell {
+  width: 100%;
+  min-height: 100vh;
+  padding: 0;
+}
+.windowed #explorer-backstore {
+  display: none;
+}
+.windowed .app-header {
+  position: relative;
+  z-index: 1;
+  width: 100%;
+  margin: 0;
+  padding: 0 18px;
+}
+.winbox {
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--accent) 32%, var(--bg-border));
+  border-radius: 8px;
+  background: rgba(9, 9, 12, 0.88);
+  box-shadow:
+    0 24px 80px rgba(0, 0, 0, 0.62),
+    0 0 42px var(--accent-trace),
+    inset 0 1px 0 rgba(255, 255, 255, 0.06),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.72);
+  backdrop-filter: blur(26px) saturate(175%);
+}
+.winbox.focus {
+  border-color: var(--accent-edge);
+  box-shadow:
+    0 26px 90px rgba(0, 0, 0, 0.68),
+    0 0 52px var(--accent-soft),
+    inset 0 1px 0 color-mix(in srgb, var(--accent) 18%, white 8%);
+}
+.wb-header {
+  position: relative;
+  border-bottom: 1px solid var(--bg-border);
+  background:
+    linear-gradient(90deg, var(--accent-wash), transparent 38%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.045), transparent);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.045);
+}
+.eta-window:not(.max):not(.min) .wb-drag {
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+}
+.winbox:not(.max):not(.min) .wb-drag:active {
+  cursor: grabbing;
+}
+.wb-header::before {
+  content: "";
+  position: absolute;
+  z-index: 2;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 3px;
+  background: linear-gradient(
+    180deg,
+    transparent,
+    var(--accent-bright),
+    transparent
+  );
+  box-shadow: 0 0 10px var(--accent);
+  pointer-events: none;
+}
+.wb-header::after {
+  content: "";
+  position: absolute;
+  right: 76px;
+  bottom: -1px;
+  width: 44px;
+  height: 1px;
+  background: var(--accent-bright);
+  box-shadow: 0 0 12px var(--accent);
+  opacity: 0.72;
+}
+.wb-title {
+  color: var(--accent-bright);
+  font: 500 11px var(--font-mono);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.wb-control {
+  opacity: 0.68;
+  transition:
+    opacity 0.16s ease,
+    background-color 0.16s ease;
+}
+.wb-control:hover {
+  opacity: 1;
+  background-color: var(--accent-wash);
+}
+.wb-body {
+  background:
+    radial-gradient(ellipse at 50% 0%, var(--accent-trace), transparent 44%),
+    rgba(8, 8, 10, 0.58);
+}
+.wb-body > .browser-panel {
+  min-height: 100%;
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+.inspector-window {
+  display: flex;
+  min-height: 100%;
+  flex-direction: column;
+}
+.inspector-content {
+  min-height: 0;
+  flex: 1;
+  padding: 22px 28px;
+  overflow: auto;
+}
+.inspector-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 10px 16px;
+  border-top: 1px solid var(--bg-border);
+  background: rgba(0, 0, 0, 0.14);
 }
 @media (max-width: 650px) {
   .app-shell {
