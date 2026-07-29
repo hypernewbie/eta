@@ -841,7 +841,7 @@ function bindExplorer(view: ExplorerView) {
     menu.hidden = false;
     iconify();
   });
-  view.element("entries").addEventListener("click", (event) => {
+  view.element("entries").addEventListener("dblclick", (event) => {
     const row = (event.target as HTMLElement).closest(
       ".entry",
     ) as HTMLElement | null;

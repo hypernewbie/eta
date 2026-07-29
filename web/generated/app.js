@@ -708,7 +708,7 @@ function bindExplorer(view) {
         menu.hidden = false;
         iconify();
     });
-    view.element("entries").addEventListener("click", (event) => {
+    view.element("entries").addEventListener("dblclick", (event) => {
         const row = event.target.closest(".entry");
         if (!row)
             return;
