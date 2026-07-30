@@ -492,6 +492,9 @@ function showToast(message, variant = "danger") {
 
 type DesktopWindow = {
   title: string;
+  kind: "explorer" | "file" | "terminal";
+  peer: Peer | null;
+  persist?: boolean;
   window: WinBoxInstance;
   state: () => Omit<
     PersistedWindow,
@@ -499,6 +502,7 @@ type DesktopWindow = {
   >;
 };
 const desktopWindows = new Map<string, DesktopWindow>();
+let activeWindowKey: string | null = null;
 type CopyTask = {
   id: string;
   name: string;
@@ -514,15 +518,17 @@ let restoringDesktop = false;
 let stateSaveTimer: number | undefined;
 
 function capturedDesktopState(): PersistedWindow[] {
-  return [...desktopWindows.values()].map((item) => ({
-    ...item.state(),
-    x: Math.max(0, Math.round(item.window.x)),
-    y: Math.max(0, Math.round(item.window.y)),
-    width: Math.max(0, Math.round(item.window.width)),
-    height: Math.max(0, Math.round(item.window.height)),
-    minimized: item.window.min,
-    maximized: item.window.max,
-  }));
+  return [...desktopWindows.values()]
+    .filter((item) => item.persist !== false)
+    .map((item) => ({
+      ...item.state(),
+      x: Math.max(0, Math.round(item.window.x)),
+      y: Math.max(0, Math.round(item.window.y)),
+      width: Math.max(0, Math.round(item.window.width)),
+      height: Math.max(0, Math.round(item.window.height)),
+      minimized: item.window.min,
+      maximized: item.window.max,
+    }));
 }
 function statePayload() {
   return JSON.stringify({ version: 1, windows: capturedDesktopState() });
@@ -586,19 +592,34 @@ function refreshTaskStrip() {
       : `${task.completed}/${task.total}`;
     return `<sl-button size="small" class="task-button copy-task ${task.error ? "copy-task-error" : ""}" title="${escapeHTML(task.error || "")}" disabled><i data-lucide="${task.error ? "circle-alert" : task.done ? "check" : "copy"}"></i>Copy ${escapeHTML(task.name)} — ${progress}</sl-button>`;
   });
-  const windows = [...desktopWindows.entries()].map(
-    ([key, item]) =>
-      `<sl-button size="small" class="task-button" data-window="${escapeHTML(key)}"><i data-lucide="${key.startsWith("explorer:") ? "folder-open" : "file-text"}"></i>${escapeHTML(item.title)}</sl-button>`,
-  );
-  taskStrip.innerHTML = [...copies, ...windows].join("");
+  const windows = [...desktopWindows.entries()].map(([key, item]) => {
+    const icon =
+      item.kind === "explorer"
+        ? "folder-open"
+        : item.kind === "terminal"
+          ? "terminal-square"
+          : "file-text";
+    const state = [
+      "task-button",
+      "task-window",
+      key === activeWindowKey ? "task-window-active" : "",
+      item.window.min ? "task-window-minimized" : "",
+    ]
+      .filter(Boolean)
+      .join(" ");
+    return `<sl-button size="small" class="${state}" style="--window-accent:${escapeHTML(windowAccent(item.peer))}" data-window="${escapeHTML(key)}" title="${escapeHTML(item.title)}" aria-label="${escapeHTML(item.title)}"><i data-lucide="${icon}"></i><span class="visually-hidden">${escapeHTML(item.title)}</span></sl-button>`;
+  });
+  taskStrip.innerHTML = [...windows, ...copies].join("");
   refreshEtaMenu();
   iconify();
 }
 function focusDesktopWindow(key: string) {
   const item = desktopWindows.get(key);
   if (!item) return;
+  activeWindowKey = key;
   item.window.restore();
   item.window.focus();
+  refreshTaskStrip();
 }
 function desktopEnabled() {
   return Boolean(window.WinBox) && document.body.classList.contains("windowed");
@@ -631,6 +652,10 @@ async function openExplorerWindow(
     refreshTaskStrip();
     scheduleDesktopSave();
   };
+  const windowFocused = () => {
+    activeWindowKey = key;
+    windowChanged();
+  };
   const explorer = new window.WinBox({
     title,
     mount: panel,
@@ -650,11 +675,12 @@ async function openExplorerWindow(
     min: restored?.minimized,
     onclose: () => {
       desktopWindows.delete(key);
+      if (activeWindowKey === key) activeWindowKey = null;
       explorerViews.delete(key);
       windowChanged();
       queueMicrotask(() => panel.remove());
     },
-    onfocus: windowChanged,
+    onfocus: windowFocused,
     onmove: windowChanged,
     onresize: windowChanged,
     onmaximize: windowChanged,
@@ -664,6 +690,8 @@ async function openExplorerWindow(
   colorWindow(explorer, peer);
   desktopWindows.set(key, {
     title,
+    kind: "explorer",
+    peer,
     window: explorer,
     state: () => ({
       kind: "explorer",
@@ -673,6 +701,7 @@ async function openExplorerWindow(
     }),
   });
   explorerViews.set(key, view);
+  activeWindowKey = key;
   refreshTaskStrip();
   scheduleDesktopSave();
   await initializeExplorer(view, restored);
@@ -858,6 +887,10 @@ async function openTerminal(view: ExplorerView, entry: Entry) {
       rows: 32,
     }),
   });
+  const key = `terminal:${created.id}`;
+  const title = view.state.peer
+    ? `${view.state.peer.glyph} Terminal — ${entry.name}`
+    : hostWindowTitle(`Terminal — ${entry.name}`);
   const panel = document.createElement("section");
   panel.className = "terminal-panel";
   const terminalHost = document.createElement("div");
@@ -924,9 +957,7 @@ async function openTerminal(view: ExplorerView, entry: Entry) {
   const resizeObserver = new ResizeObserver(sendResize);
   resizeObserver.observe(panel);
   const terminal = new window.WinBox({
-    title: view.state.peer
-      ? `${view.state.peer.glyph} Terminal — ${entry.name}`
-      : hostWindowTitle(`Terminal — ${entry.name}`),
+    title,
     mount: panel,
     class: view.state.peer
       ? "eta-window identity-window peer-window"
@@ -939,10 +970,18 @@ async function openTerminal(view: ExplorerView, entry: Entry) {
     onresize: sendResize,
     onmaximize: sendResize,
     onrestore: sendResize,
+    onfocus: () => {
+      activeWindowKey = key;
+      refreshTaskStrip();
+    },
+    onminimize: () => refreshTaskStrip(),
     onclose: () => {
       stopped = true;
       resizeObserver.disconnect();
       xterm?.dispose();
+      desktopWindows.delete(key);
+      if (activeWindowKey === key) activeWindowKey = null;
+      refreshTaskStrip();
       void api(terminalURL(view, created.id), {
         method: "DELETE",
       });
@@ -950,6 +989,21 @@ async function openTerminal(view: ExplorerView, entry: Entry) {
     },
   });
   colorWindow(terminal, view.state.peer);
+  desktopWindows.set(key, {
+    title,
+    kind: "terminal",
+    peer: view.state.peer,
+    persist: false,
+    window: terminal,
+    state: () => ({
+      kind: "file",
+      root: view.state.root,
+      path: entry.path,
+      peer: view.state.peer?.url,
+    }),
+  });
+  activeWindowKey = key;
+  refreshTaskStrip();
   terminal.focus();
   sendResize();
   xterm?.focus();
@@ -982,8 +1036,15 @@ async function openInspector(
     scheduleDesktopSave();
   };
   const peer = view.state.peer;
+  const title = peer
+    ? `${peer.glyph} ${entry.name}`
+    : hostWindowTitle(entry.name);
+  const windowFocused = () => {
+    activeWindowKey = key;
+    windowChanged();
+  };
   const inspector = new WinBox({
-    title: peer ? `${peer.glyph} ${entry.name}` : hostWindowTitle(entry.name),
+    title,
     mount: panel,
     class: peer
       ? "eta-window identity-window peer-window"
@@ -997,9 +1058,10 @@ async function openInspector(
     min: restored?.minimized,
     onclose: () => {
       desktopWindows.delete(key);
+      if (activeWindowKey === key) activeWindowKey = null;
       windowChanged();
     },
-    onfocus: windowChanged,
+    onfocus: windowFocused,
     onmove: windowChanged,
     onresize: windowChanged,
     onmaximize: windowChanged,
@@ -1008,7 +1070,9 @@ async function openInspector(
   });
   colorWindow(inspector, peer);
   desktopWindows.set(key, {
-    title: peer ? `${peer.glyph} ${entry.name}` : hostWindowTitle(entry.name),
+    title,
+    kind: "file",
+    peer,
     window: inspector,
     state: () => ({
       kind: "file",
@@ -1017,6 +1081,7 @@ async function openInspector(
       peer: peer?.url,
     }),
   });
+  activeWindowKey = key;
   refreshTaskStrip();
   scheduleDesktopSave();
   const result = await renderPreview(view, entry, content);

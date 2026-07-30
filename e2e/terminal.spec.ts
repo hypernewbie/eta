@@ -8,5 +8,8 @@ test("local Explorer opens an xterm-backed terminal window", async ({ page }) =>
 
   const terminal = page.locator(".winbox.eta-window").last();
   await expect(terminal.locator(".terminal-xterm .xterm")).toBeVisible();
+  const terminalTask = page.locator('#task-strip .task-window[title*="Terminal"]');
+  await expect(terminalTask).toHaveCount(1);
   await terminal.locator(".wb-close").click({ force: true });
+  await expect(terminalTask).toHaveCount(0);
 });

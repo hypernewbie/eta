@@ -14,11 +14,15 @@ test("taskbar closes and reopens Explorer", async ({ page }) => {
 
   const explorer = page.locator(".winbox.eta-window").first();
   await expect(explorer).toBeVisible();
-  await expect(page.locator("#task-strip")).toContainText("Explorer");
+  const explorerTask = page.locator("#task-strip .task-window");
+  await expect(explorerTask).toHaveCount(1);
+  await expect(explorerTask).toHaveAttribute("title", /Explorer/);
+  const explorerTaskBox = await explorerTask.boundingBox();
+  expect(explorerTaskBox?.width).toBeLessThanOrEqual(34);
 
   await explorer.locator(".wb-close").click();
   await expect(explorer).toHaveCount(0);
-  await expect(page.locator("#task-strip")).not.toContainText("Explorer");
+  await expect(page.locator("#task-strip .task-window")).toHaveCount(0);
 
   await page.locator("#eta-launcher").click();
   const localLocation = page.locator('[data-location="local"]');
