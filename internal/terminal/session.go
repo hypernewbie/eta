@@ -56,7 +56,15 @@ func (m *Manager) Start(directory string, columns, rows uint16) (string, error) 
 	m.sessions[id] = s
 	m.mu.Unlock()
 	go s.collect()
-	go func() { _ = cmd.Wait(); s.close() }()
+	go func() {
+		_ = cmd.Wait()
+		s.close()
+		m.mu.Lock()
+		if m.sessions[id] == s {
+			delete(m.sessions, id)
+		}
+		m.mu.Unlock()
+	}()
 	return id, nil
 }
 func (m *Manager) Get(id string) (*Session, bool) {
