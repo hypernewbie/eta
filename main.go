@@ -32,6 +32,7 @@ import (
 	"github.com/hypernewbie/eta/internal/peers"
 	"github.com/hypernewbie/eta/internal/rangecache"
 	"github.com/hypernewbie/eta/internal/remotefile"
+	"github.com/hypernewbie/eta/internal/terminal"
 	"github.com/hypernewbie/eta/internal/transfer"
 	"github.com/hypernewbie/eta/internal/uistate"
 )
@@ -64,6 +65,7 @@ type server struct {
 	remoteCache *diskcache.Cache
 	hotRanges   *rangecache.Cache
 	transfers   *transfer.Store
+	terminals   *terminal.Manager
 }
 
 type entry struct {
@@ -229,7 +231,7 @@ func newServer(paths []string) (*server, error) {
 	if err != nil {
 		return nil, fmt.Errorf("load embedded web assets: %w", err)
 	}
-	s := &server{web: web, identity: hostid.For("test-host", "eta")}
+	s := &server{web: web, identity: hostid.For("test-host", "eta"), terminals: terminal.NewManager()}
 	seen := map[string]bool{}
 	for _, path := range paths {
 		absolute, err := filepath.Abs(path)
@@ -264,6 +266,11 @@ func (s *server) routes() http.Handler {
 	mux.HandleFunc("PUT /api/state", s.handleStatePut)
 	mux.HandleFunc("GET /api/roots", s.handleRoots)
 	mux.HandleFunc("GET /api/peers", s.handlePeers)
+	mux.HandleFunc("POST /api/terminals", s.handleTerminalStart)
+	mux.HandleFunc("GET /api/terminals/{id}", s.handleTerminalOutput)
+	mux.HandleFunc("POST /api/terminals/{id}/input", s.handleTerminalInput)
+	mux.HandleFunc("POST /api/terminals/{id}/resize", s.handleTerminalResize)
+	mux.HandleFunc("DELETE /api/terminals/{id}", s.handleTerminalClose)
 	mux.HandleFunc("POST /api/transfers", s.handleTransferCreate)
 	mux.HandleFunc("POST /api/transfers/send", s.handleTransferSend)
 	mux.HandleFunc("GET /api/transfers/{id}", s.handleTransferStatus)
@@ -319,6 +326,101 @@ func (s *server) handleStatePut(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+func (s *server) handleTerminalStart(w http.ResponseWriter, r *http.Request) {
+	if s.terminals == nil {
+		writeError(w, errors.New("terminal service is unavailable"))
+		return
+	}
+	var request struct {
+		Root    int    `json:"root"`
+		Path    string `json:"path"`
+		Columns uint16 `json:"columns"`
+		Rows    uint16 `json:"rows"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&request); err != nil {
+		writeError(w, err)
+		return
+	}
+	targetRequest, _ := http.NewRequest(http.MethodGet, "/?"+url.Values{"root": {strconv.Itoa(request.Root)}, "path": {request.Path}}.Encode(), nil)
+	_, target, _, err := s.target(targetRequest)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	if info, err := os.Stat(target); err != nil {
+		writeError(w, err)
+		return
+	} else if !info.IsDir() {
+		target = filepath.Dir(target)
+	}
+	id, err := s.terminals.Start(target, request.Columns, request.Rows)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, map[string]string{"id": id})
+}
+func (s *server) handleTerminalOutput(w http.ResponseWriter, r *http.Request) {
+	s.terminalSession(w, r, func(session *terminal.Session) {
+		offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
+		output, next, closed := session.Output(offset)
+		writeJSON(w, http.StatusOK, map[string]any{"output": string(output), "offset": next, "closed": closed})
+	})
+}
+func (s *server) handleTerminalInput(w http.ResponseWriter, r *http.Request) {
+	s.terminalSession(w, r, func(session *terminal.Session) {
+		var request struct {
+			Input string `json:"input"`
+		}
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&request); err != nil {
+			writeError(w, err)
+			return
+		}
+		if err := session.Input([]byte(request.Input)); err != nil {
+			writeError(w, err)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
+}
+func (s *server) handleTerminalResize(w http.ResponseWriter, r *http.Request) {
+	s.terminalSession(w, r, func(session *terminal.Session) {
+		var request struct {
+			Columns uint16 `json:"columns"`
+			Rows    uint16 `json:"rows"`
+		}
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&request); err != nil {
+			writeError(w, err)
+			return
+		}
+		if err := session.Resize(request.Columns, request.Rows); err != nil {
+			writeError(w, err)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
+}
+func (s *server) handleTerminalClose(w http.ResponseWriter, r *http.Request) {
+	if s.terminals == nil {
+		writeError(w, errors.New("terminal service is unavailable"))
+		return
+	}
+	s.terminals.Close(r.PathValue("id"))
+	w.WriteHeader(http.StatusNoContent)
+}
+func (s *server) terminalSession(w http.ResponseWriter, r *http.Request, action func(*terminal.Session)) {
+	if s.terminals == nil {
+		writeError(w, errors.New("terminal service is unavailable"))
+		return
+	}
+	session, found := s.terminals.Get(r.PathValue("id"))
+	if !found {
+		writeError(w, errors.New("unknown terminal"))
+		return
+	}
+	action(session)
 }
 
 func (s *server) handleTransferSend(w http.ResponseWriter, r *http.Request) {
