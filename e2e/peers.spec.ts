@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test";
 import { spawn } from "node:child_process";
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 const peerPort = 17081;
@@ -29,6 +29,7 @@ test("enrolled peer opens as a source-aware remote Explorer", async ({
   rmSync(peerCacheDir, { recursive: true, force: true });
   mkdirSync(peerDir, { recursive: true });
   mkdirSync(peerCacheDir, { recursive: true });
+  mkdirSync(join(peerDir, "destination"));
   writeFileSync(join(peerDir, "remote.txt"), "remote eta fixture\n");
   const peer = spawn(
     "go",
@@ -54,7 +55,7 @@ test("enrolled peer opens as a source-aware remote Explorer", async ({
       "--transfer-dir",
       join(peerCacheDir, "transfers"),
     ],
-    { stdio: "ignore" },
+    { stdio: "ignore", detached: true },
   );
   try {
     await waitForPeer();
@@ -72,9 +73,26 @@ test("enrolled peer opens as a source-aware remote Explorer", async ({
     const remoteExplorer = page.locator(".winbox.peer-window");
     await expect(remoteExplorer).toHaveCount(1);
     await expect(remoteExplorer.getByText("remote.txt", { exact: true })).toBeVisible();
+
+    const localExplorer = page.locator(".winbox.eta-window:not(.peer-window)").last();
+    await page.locator("#task-strip .task-button").filter({ hasText: "Explorer" }).first().click();
+    await localExplorer.getByText("README.md", { exact: true }).click({ button: "right" });
+    await page.locator('[data-file-action="copy"]').click();
+    await page.locator("#task-strip .task-button").filter({ hasText: "Explorer" }).last().click();
+    await remoteExplorer.getByText("destination", { exact: true }).click({ button: "right" });
+    await page.locator('[data-file-action="paste"]').click();
+    const copyTask = page.locator(".copy-task");
+    await expect(copyTask).toContainText("Copy README.md");
+    await page.waitForTimeout(750);
+    const copyError = await copyTask.getAttribute("title");
+    if (copyError) throw new Error(`copy task failed: ${copyError}`);
+    await expect.poll(() => existsSync(join(peerDir, "destination", "README.md")), { timeout: 10_000 }).toBeTruthy();
+    await remoteExplorer.getByText("destination", { exact: true }).dblclick();
+    await expect(remoteExplorer.getByText("README.md", { exact: true })).toBeVisible();
+    await remoteExplorer.locator(".wb-close").click({ force: true });
   } finally {
-    await request.delete(`/api/peers?url=${encodeURIComponent(peerURL)}`);
-    peer.kill("SIGTERM");
+    try { await request.delete(`/api/peers?url=${encodeURIComponent(peerURL)}`); } catch { /* test timeout/teardown */ }
+    if (peer.pid) process.kill(-peer.pid, "SIGTERM");
     rmSync(peerDir, { recursive: true, force: true });
     rmSync(peerCacheDir, { recursive: true, force: true });
   }

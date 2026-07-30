@@ -7,6 +7,31 @@ import (
 	"testing"
 )
 
+func TestStoreFinalizesEmptyFile(t *testing.T) {
+	store, err := NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest, err := BuildManifest(bytes.NewReader(nil), 4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Open("empty", manifest); err != nil {
+		t.Fatal(err)
+	}
+	if missing, err := store.Missing("empty"); err != nil || len(missing) != 0 {
+		t.Fatalf("missing=%v err=%v", missing, err)
+	}
+	out := filepath.Join(t.TempDir(), "empty")
+	if err := store.Finalize("empty", out); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(out)
+	if err != nil || info.Size() != 0 {
+		t.Fatalf("info=%v err=%v", info, err)
+	}
+}
+
 func TestStoreResumesAndAtomicallyFinalizes(t *testing.T) {
 	m, e := BuildManifest(bytes.NewBufferString("eta transfer"), 4)
 	if e != nil {

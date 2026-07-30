@@ -33,6 +33,10 @@ func SendFileWithProgress(ctx context.Context, client *http.Client, baseURL stri
 	if err != nil {
 		return "", err
 	}
+	return sendFileWithManifest(ctx, client, baseURL, root, destination, source, manifest, progress)
+}
+
+func sendFileWithManifest(ctx context.Context, client *http.Client, baseURL string, root int, destination, source string, manifest Manifest, progress func(completed, total int)) (string, error) {
 	endpoint := strings.TrimSuffix(baseURL, "/") + "/api/transfers"
 	payload, err := json.Marshal(map[string]any{"root": root, "path": destination, "manifest": manifest})
 	if err != nil {
@@ -53,7 +57,7 @@ func SendFileWithProgress(ctx context.Context, client *http.Client, baseURL stri
 	if err = requestJSON(ctx, client, http.MethodGet, endpoint+"/"+created.ID, nil, &status); err != nil {
 		return "", err
 	}
-	file, err = os.Open(source)
+	file, err := os.Open(source)
 	if err != nil {
 		return "", err
 	}
@@ -85,6 +89,15 @@ func SendFileWithProgress(ctx context.Context, client *http.Client, baseURL stri
 	}
 	return created.ID, nil
 }
+
+func makeDirectory(ctx context.Context, client *http.Client, baseURL string, root int, path string) error {
+	payload, err := json.Marshal(map[string]any{"root": root, "path": path})
+	if err != nil {
+		return err
+	}
+	return requestJSON(ctx, client, http.MethodPost, strings.TrimSuffix(baseURL, "/")+"/api/directories", bytes.NewReader(payload), nil)
+}
+
 func requestJSON(ctx context.Context, client *http.Client, method, endpoint string, body io.Reader, result any) error {
 	if client == nil {
 		client = http.DefaultClient

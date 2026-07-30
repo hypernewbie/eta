@@ -292,6 +292,7 @@ func (s *server) routes() http.Handler {
 	mux.HandleFunc("GET /api/remote/thumbnail", s.handleRemoteThumbnail)
 	mux.HandleFunc("POST /api/peers", s.handlePeerAdd)
 	mux.HandleFunc("DELETE /api/peers", s.handlePeerDelete)
+	mux.HandleFunc("POST /api/directories", s.handleDirectoryCreate)
 	mux.HandleFunc("POST /api/copy", s.handleCopy)
 	mux.HandleFunc("POST /api/rename", s.handleRename)
 	mux.HandleFunc("POST /api/delete", s.handleDelete)
@@ -460,30 +461,48 @@ func (s *server) handleTransferSend(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	info, err := os.Stat(source)
-	if err != nil || !info.Mode().IsRegular() {
-		writeError(w, errors.New("source is not a regular file"))
+	if err != nil || (!info.Mode().IsRegular() && !info.IsDir()) {
+		writeError(w, errors.New("source is not a regular file or directory"))
 		return
 	}
 	if s.transferJobs == nil {
 		s.transferJobs = transfer.NewJobs()
 	}
-	manifestFile, err := os.Open(source)
-	if err != nil {
-		writeError(w, err)
-		return
+	var tree transfer.Tree
+	totalChunks := 0
+	if info.IsDir() {
+		tree, err = transfer.BuildTree(source)
+		if err != nil {
+			writeError(w, err)
+			return
+		}
+		totalChunks = tree.TotalChunks
+	} else {
+		manifestFile, openErr := os.Open(source)
+		if openErr != nil {
+			writeError(w, openErr)
+			return
+		}
+		manifest, manifestErr := transfer.BuildManifest(manifestFile, transfer.DefaultChunkSize)
+		_ = manifestFile.Close()
+		if manifestErr != nil {
+			writeError(w, manifestErr)
+			return
+		}
+		totalChunks = len(manifest.Chunks)
 	}
-	manifest, err := transfer.BuildManifest(manifestFile, transfer.DefaultChunkSize)
-	_ = manifestFile.Close()
-	if err != nil {
-		writeError(w, err)
-		return
-	}
-	job := s.transferJobs.Start(len(manifest.Chunks))
+	job := s.transferJobs.Start(totalChunks)
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 		defer cancel()
-		_, err := transfer.SendFileWithProgress(ctx, &http.Client{Timeout: 30 * time.Second}, peer.URL, request.DestinationRoot, request.DestinationPath, source, func(completed, _ int) { s.transferJobs.Progress(job.ID, completed) })
-		s.transferJobs.Finish(job.ID, err)
+		client := &http.Client{Timeout: 30 * time.Second}
+		var transferErr error
+		if info.IsDir() {
+			transferErr = transfer.SendTreeWithProgress(ctx, client, peer.URL, request.DestinationRoot, request.DestinationPath, source, tree, func(completed, _ int) { s.transferJobs.Progress(job.ID, completed) })
+		} else {
+			_, transferErr = transfer.SendFileWithProgress(ctx, client, peer.URL, request.DestinationRoot, request.DestinationPath, source, func(completed, _ int) { s.transferJobs.Progress(job.ID, completed) })
+		}
+		s.transferJobs.Finish(job.ID, transferErr)
 	}()
 	writeJSON(w, http.StatusAccepted, job)
 }
@@ -660,7 +679,7 @@ func (s *server) handleTransferCreate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	if request.Manifest.ChunkSize <= 0 || request.Manifest.Size < 0 || len(request.Manifest.Chunks) == 0 || len(request.Manifest.Chunks) > 1<<16 {
+	if request.Manifest.ChunkSize <= 0 || request.Manifest.Size < 0 || len(request.Manifest.Chunks) > 1<<16 || (request.Manifest.Size > 0 && len(request.Manifest.Chunks) == 0) {
 		writeError(w, errors.New("invalid transfer manifest"))
 		return
 	}
@@ -950,6 +969,30 @@ func (s *server) handlePeerDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *server) handleDirectoryCreate(w http.ResponseWriter, r *http.Request) {
+	var request struct {
+		Root int    `json:"root"`
+		Path string `json:"path"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&request); err != nil {
+		writeError(w, err)
+		return
+	}
+	if request.Root < 0 || request.Root >= len(s.roots) {
+		writeError(w, errors.New("invalid root"))
+		return
+	}
+	operations, err := fileops.New(s.roots[request.Root].Path)
+	if err == nil {
+		err = operations.EnsureDirectory(request.Path)
+	}
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusCreated)
 }
 
 func (s *server) handleCopy(w http.ResponseWriter, r *http.Request) {

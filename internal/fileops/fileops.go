@@ -160,6 +160,40 @@ func (r Root) CopyRegular(from Root, sourceRelative, destinationRelative string)
 	return nil
 }
 
+// EnsureDirectory creates one contained directory after its parent has been
+// resolved, refusing symlinks and existing non-directory targets.
+func (r Root) EnsureDirectory(relative string) error {
+	candidate, err := r.lexical(relative)
+	if err != nil {
+		return err
+	}
+	parent, err := filepath.EvalSymlinks(filepath.Dir(candidate))
+	if err != nil || !within(r.path, parent) {
+		return errors.New("path escapes configured root")
+	}
+	if info, err := os.Lstat(candidate); err == nil {
+		if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+			return errors.New("destination exists and is not a directory")
+		}
+		real, err := filepath.EvalSymlinks(candidate)
+		if err != nil || !within(r.path, real) {
+			return errors.New("path escapes configured root")
+		}
+		return nil
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	if err := os.Mkdir(candidate, 0o755); err != nil {
+		return err
+	}
+	real, err := filepath.EvalSymlinks(candidate)
+	if err != nil || !within(r.path, real) {
+		_ = os.Remove(candidate)
+		return errors.New("path escapes configured root")
+	}
+	return nil
+}
+
 func copyTree(source, destination string) error {
 	return filepath.WalkDir(source, func(path string, item os.DirEntry, err error) error {
 		if err != nil {

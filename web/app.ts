@@ -516,7 +516,7 @@ function refreshTaskStrip() {
         ? "failed"
         : "complete"
       : `${task.completed}/${task.total}`;
-    return `<sl-button size="small" class="task-button copy-task ${task.error ? "copy-task-error" : ""}" disabled><i data-lucide="${task.error ? "circle-alert" : task.done ? "check" : "copy"}"></i>Copy ${escapeHTML(task.name)} — ${progress}</sl-button>`;
+    return `<sl-button size="small" class="task-button copy-task ${task.error ? "copy-task-error" : ""}" title="${escapeHTML(task.error || "")}" disabled><i data-lucide="${task.error ? "circle-alert" : task.done ? "check" : "copy"}"></i>Copy ${escapeHTML(task.name)} — ${progress}</sl-button>`;
   });
   const windows = [...desktopWindows.entries()].map(
     ([key, item]) =>
@@ -1023,13 +1023,16 @@ function bindExplorer(view: ExplorerView) {
       menu.querySelector('[data-file-action="trusted-html"]') as HTMLElement
     ).hidden = !htmlExtensions.has(extension(contextEntry.entry.name));
     (menu.querySelector('[data-file-action="copy"]') as HTMLElement).hidden =
-      contextEntry.entry.kind !== "file";
+      contextEntry.entry.kind !== "file" &&
+      contextEntry.entry.kind !== "directory";
     (menu.querySelector('[data-file-action="cut"]') as HTMLElement).hidden =
-      contextEntry.entry.kind !== "file";
+      contextEntry.entry.kind !== "file" &&
+      contextEntry.entry.kind !== "directory";
     (menu.querySelector('[data-file-action="paste"]') as HTMLElement).hidden =
       contextEntry.entry.kind !== "directory" ||
       !explorerClipboard ||
-      explorerClipboard.entry.kind !== "file";
+      (explorerClipboard.entry.kind !== "file" &&
+        explorerClipboard.entry.kind !== "directory");
     (
       menu.querySelector('[data-file-action="terminal"]') as HTMLElement
     ).hidden = !row || !!view.state.peer;
@@ -1262,7 +1265,11 @@ async function monitorCopy(
 
 async function pasteIntoFolder(destination: ExplorerEntry) {
   const source = explorerClipboard;
-  if (!source || source.entry.kind !== "file") return;
+  if (
+    !source ||
+    (source.entry.kind !== "file" && source.entry.kind !== "directory")
+  )
+    return;
   const destinationPath = destination.entry.path
     ? `${destination.entry.path}/${source.entry.name}`
     : source.entry.name;

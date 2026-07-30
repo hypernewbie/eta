@@ -387,7 +387,7 @@ function refreshTaskStrip() {
                 ? "failed"
                 : "complete"
             : `${task.completed}/${task.total}`;
-        return `<sl-button size="small" class="task-button copy-task ${task.error ? "copy-task-error" : ""}" disabled><i data-lucide="${task.error ? "circle-alert" : task.done ? "check" : "copy"}"></i>Copy ${escapeHTML(task.name)} — ${progress}</sl-button>`;
+        return `<sl-button size="small" class="task-button copy-task ${task.error ? "copy-task-error" : ""}" title="${escapeHTML(task.error || "")}" disabled><i data-lucide="${task.error ? "circle-alert" : task.done ? "check" : "copy"}"></i>Copy ${escapeHTML(task.name)} — ${progress}</sl-button>`;
     });
     const windows = [...desktopWindows.entries()].map(([key, item]) => `<sl-button size="small" class="task-button" data-window="${escapeHTML(key)}"><i data-lucide="${key.startsWith("explorer:") ? "folder-open" : "file-text"}"></i>${escapeHTML(item.title)}</sl-button>`);
     taskStrip.innerHTML = [...peerButtons, ...copies, ...windows].join("");
@@ -859,13 +859,16 @@ function bindExplorer(view) {
         const menu = $("#file-context-menu");
         menu.querySelector('[data-file-action="trusted-html"]').hidden = !htmlExtensions.has(extension(contextEntry.entry.name));
         menu.querySelector('[data-file-action="copy"]').hidden =
-            contextEntry.entry.kind !== "file";
+            contextEntry.entry.kind !== "file" &&
+                contextEntry.entry.kind !== "directory";
         menu.querySelector('[data-file-action="cut"]').hidden =
-            contextEntry.entry.kind !== "file";
+            contextEntry.entry.kind !== "file" &&
+                contextEntry.entry.kind !== "directory";
         menu.querySelector('[data-file-action="paste"]').hidden =
             contextEntry.entry.kind !== "directory" ||
                 !explorerClipboard ||
-                explorerClipboard.entry.kind !== "file";
+                (explorerClipboard.entry.kind !== "file" &&
+                    explorerClipboard.entry.kind !== "directory");
         menu.querySelector('[data-file-action="terminal"]').hidden = !row || !!view.state.peer;
         menu.querySelector('[data-file-action="rename"]').hidden =
             !row || !!view.state.peer;
@@ -1078,7 +1081,8 @@ async function monitorCopy(jobID, sourcePeer, source, destination) {
 }
 async function pasteIntoFolder(destination) {
     const source = explorerClipboard;
-    if (!source || source.entry.kind !== "file")
+    if (!source ||
+        (source.entry.kind !== "file" && source.entry.kind !== "directory"))
         return;
     const destinationPath = destination.entry.path
         ? `${destination.entry.path}/${source.entry.name}`

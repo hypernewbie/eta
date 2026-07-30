@@ -61,6 +61,71 @@ func TestCoordinatorDeletesRemoteSourceAfterMove(t *testing.T) {
 	}
 }
 
+func TestCoordinatorTransfersDirectoryToPeer(t *testing.T) {
+	sourceRoot, destinationRoot := t.TempDir(), t.TempDir()
+	if err := os.MkdirAll(filepath.Join(sourceRoot, "folder", "nested"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(sourceRoot, "folder", "empty"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sourceRoot, "folder", "nested", "source.txt"), []byte("eta"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	coordinator, err := newServer([]string{sourceRoot})
+	if err != nil {
+		t.Fatal(err)
+	}
+	receiver, err := newServer([]string{destinationRoot})
+	if err != nil {
+		t.Fatal(err)
+	}
+	receiver.transfers, err = transfer.NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	peer := httptest.NewServer(receiver.routes())
+	defer peer.Close()
+	coordinator.peers = peers.New(filepath.Join(t.TempDir(), "peers.json"))
+	if err := coordinator.peers.Add(peers.Peer{URL: peer.URL}); err != nil {
+		t.Fatal(err)
+	}
+	payload := bytes.NewBufferString(`{"peer":"` + peer.URL + `","sourceRoot":0,"sourcePath":"folder","destinationRoot":0,"destinationPath":"copied"}`)
+	response := httptest.NewRecorder()
+	coordinator.routes().ServeHTTP(response, httptest.NewRequest("POST", "/api/transfers/send", payload))
+	if response.Code != http.StatusAccepted {
+		t.Fatalf("send=%d %s", response.Code, response.Body.String())
+	}
+	var job transfer.Job
+	if err := json.NewDecoder(response.Body).Decode(&job); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		current, found := coordinator.transferJobs.Get(job.ID)
+		if !found {
+			t.Fatal("job missing")
+		}
+		if current.Done {
+			if current.Error != "" {
+				t.Fatal(current.Error)
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("transfer did not finish")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	body, err := os.ReadFile(filepath.Join(destinationRoot, "copied", "nested", "source.txt"))
+	if err != nil || string(body) != "eta" {
+		t.Fatalf("body=%q err=%v", body, err)
+	}
+	if info, err := os.Stat(filepath.Join(destinationRoot, "copied", "empty")); err != nil || !info.IsDir() {
+		t.Fatalf("empty directory missing: %v", err)
+	}
+}
+
 func TestCoordinatorAsksPeerToTransferDirectly(t *testing.T) {
 	sourceRoot, destinationRoot := t.TempDir(), t.TempDir()
 	source, err := newServer([]string{sourceRoot})
