@@ -17,7 +17,7 @@ test("launcher opens independently navigable Explorer windows", async ({
   const folder = second.locator(".entry.directory").first();
   const folderName = await folder.locator(".entry-name").textContent();
   if (!folderName) throw new Error("Expected a folder to navigate into");
-  await folder.click();
+  await folder.dblclick();
 
   await expect(second.locator('[data-explorer="breadcrumbs"]')).toContainText(
     folderName,
