@@ -73,6 +73,11 @@ test("enrolled peer opens as a source-aware remote Explorer", async ({
     const remoteExplorer = page.locator(".winbox.peer-window");
     await expect(remoteExplorer).toHaveCount(1);
     await expect(remoteExplorer.getByText("remote.txt", { exact: true })).toBeVisible();
+    await remoteExplorer.getByText("destination", { exact: true }).click({ button: "right" });
+    await page.locator('[data-file-action="terminal"]').click();
+    const remoteTerminal = page.locator(".winbox.peer-window").last();
+    await expect(remoteTerminal.locator(".terminal-xterm .xterm")).toBeVisible();
+    await remoteTerminal.locator(".wb-close").click({ force: true });
 
     const localExplorer = page.locator(".winbox.eta-window:not(.peer-window)").last();
     await page.locator("#task-strip .task-button").filter({ hasText: "Explorer" }).first().click();

@@ -280,6 +280,11 @@ func (s *server) routes() http.Handler {
 	mux.HandleFunc("POST /api/terminals/{id}/input", s.handleTerminalInput)
 	mux.HandleFunc("POST /api/terminals/{id}/resize", s.handleTerminalResize)
 	mux.HandleFunc("DELETE /api/terminals/{id}", s.handleTerminalClose)
+	mux.HandleFunc("POST /api/remote/terminals", s.handleRemoteTerminalStart)
+	mux.HandleFunc("GET /api/remote/terminals/{id}", s.handleRemoteTerminalOutput)
+	mux.HandleFunc("POST /api/remote/terminals/{id}/input", s.handleRemoteTerminalInput)
+	mux.HandleFunc("POST /api/remote/terminals/{id}/resize", s.handleRemoteTerminalResize)
+	mux.HandleFunc("DELETE /api/remote/terminals/{id}", s.handleRemoteTerminalClose)
 	mux.HandleFunc("POST /api/transfers", s.handleTransferCreate)
 	mux.HandleFunc("POST /api/transfers/send", s.handleTransferSend)
 	mux.HandleFunc("POST /api/remote/transfers/send", s.handleRemoteTransferSend)
@@ -426,6 +431,67 @@ func (s *server) handleTerminalClose(w http.ResponseWriter, r *http.Request) {
 	s.terminals.Close(r.PathValue("id"))
 	w.WriteHeader(http.StatusNoContent)
 }
+func (s *server) handleRemoteTerminalStart(w http.ResponseWriter, r *http.Request) {
+	s.proxyRemoteTerminal(w, r, "/api/terminals")
+}
+func (s *server) handleRemoteTerminalOutput(w http.ResponseWriter, r *http.Request) {
+	s.proxyRemoteTerminal(w, r, "/api/terminals/"+url.PathEscape(r.PathValue("id")))
+}
+func (s *server) handleRemoteTerminalInput(w http.ResponseWriter, r *http.Request) {
+	s.proxyRemoteTerminal(w, r, "/api/terminals/"+url.PathEscape(r.PathValue("id"))+"/input")
+}
+func (s *server) handleRemoteTerminalResize(w http.ResponseWriter, r *http.Request) {
+	s.proxyRemoteTerminal(w, r, "/api/terminals/"+url.PathEscape(r.PathValue("id"))+"/resize")
+}
+func (s *server) handleRemoteTerminalClose(w http.ResponseWriter, r *http.Request) {
+	s.proxyRemoteTerminal(w, r, "/api/terminals/"+url.PathEscape(r.PathValue("id")))
+}
+func (s *server) proxyRemoteTerminal(w http.ResponseWriter, r *http.Request, route string) {
+	if s.peers == nil {
+		writeError(w, errors.New("peer inventory is unavailable"))
+		return
+	}
+	peer, found, err := s.peers.Find(r.URL.Query().Get("peer"))
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	if !found {
+		writeError(w, errors.New("unknown peer"))
+		return
+	}
+	remote, err := url.Parse(peer.URL)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	remote.Path = strings.TrimSuffix(remote.Path, "/") + route
+	if offset := r.URL.Query().Get("offset"); offset != "" {
+		query := remote.Query()
+		query.Set("offset", offset)
+		remote.RawQuery = query.Encode()
+	}
+	request, err := http.NewRequestWithContext(r.Context(), r.Method, remote.String(), http.MaxBytesReader(w, r.Body, 64<<10))
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	if contentType := r.Header.Get("Content-Type"); contentType != "" {
+		request.Header.Set("Content-Type", contentType)
+	}
+	response, err := (&http.Client{Timeout: 10 * time.Second}).Do(request)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	defer response.Body.Close()
+	if contentType := response.Header.Get("Content-Type"); contentType != "" {
+		w.Header().Set("Content-Type", contentType)
+	}
+	w.WriteHeader(response.StatusCode)
+	_, _ = io.Copy(w, response.Body)
+}
+
 func (s *server) terminalSession(w http.ResponseWriter, r *http.Request, action func(*terminal.Session)) {
 	if s.terminals == nil {
 		writeError(w, errors.New("terminal service is unavailable"))

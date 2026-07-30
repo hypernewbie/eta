@@ -410,6 +410,19 @@ function sourceURL(
   if (view.state.peer) query.set("peer", view.state.peer.url);
   return `${view.state.peer ? "/api/remote" : "/api"}/${endpoint}?${query}`;
 }
+function terminalURL(
+  view: ExplorerView,
+  id = "",
+  action = "",
+  params: Record<string, string> = {},
+) {
+  const query = new URLSearchParams(params);
+  if (view.state.peer) query.set("peer", view.state.peer.url);
+  const suffix = id
+    ? `/${encodeURIComponent(id)}${action ? `/${action}` : ""}`
+    : "";
+  return `${view.state.peer ? "/api/remote" : "/api"}/terminals${suffix}?${query}`;
+}
 function fileURL(view: ExplorerView, path: string, download = false) {
   return sourceURL(view, "file", {
     root: String(view.state.root),
@@ -818,7 +831,7 @@ async function renderPreview(
 }
 
 async function openTerminal(view: ExplorerView, entry: Entry) {
-  const created = await api("/api/terminals", {
+  const created = await api(sourceURL(view, "terminals", {}), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -830,6 +843,11 @@ async function openTerminal(view: ExplorerView, entry: Entry) {
   });
   const panel = document.createElement("section");
   panel.className = "terminal-panel";
+  if (view.state.peer)
+    panel.style.setProperty(
+      "--window-accent",
+      COLORS[view.state.peer.accent]?.accent || "#7c6af7",
+    );
   const terminalHost = document.createElement("div");
   terminalHost.className = "terminal-xterm";
   panel.append(terminalHost);
@@ -860,7 +878,7 @@ async function openTerminal(view: ExplorerView, entry: Entry) {
     if (stopped) return;
     try {
       const result = await api(
-        `/api/terminals/${encodeURIComponent(created.id)}?offset=${offset}`,
+        terminalURL(view, created.id, "", { offset: String(offset) }),
       );
       if (result.output) xterm?.write(result.output);
       offset = result.offset;
@@ -877,7 +895,7 @@ async function openTerminal(view: ExplorerView, entry: Entry) {
   const sendResize = () => {
     if (!xterm || stopped) return;
     fit?.fit();
-    void api(`/api/terminals/${encodeURIComponent(created.id)}/resize`, {
+    void api(terminalURL(view, created.id, "resize"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ columns: xterm.cols, rows: xterm.rows }),
@@ -885,7 +903,7 @@ async function openTerminal(view: ExplorerView, entry: Entry) {
   };
   xterm?.onData((input) => {
     if (stopped) return;
-    void api(`/api/terminals/${encodeURIComponent(created.id)}/input`, {
+    void api(terminalURL(view, created.id, "input"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ input }),
@@ -894,9 +912,11 @@ async function openTerminal(view: ExplorerView, entry: Entry) {
   const resizeObserver = new ResizeObserver(sendResize);
   resizeObserver.observe(panel);
   const terminal = new window.WinBox({
-    title: hostWindowTitle(`Terminal — ${entry.name}`),
+    title: view.state.peer
+      ? `${view.state.peer.glyph} Terminal — ${entry.name}`
+      : hostWindowTitle(`Terminal — ${entry.name}`),
     mount: panel,
-    class: "eta-window",
+    class: view.state.peer ? "eta-window peer-window" : "eta-window",
     x: "center",
     y: "center",
     width: Math.min(980, window.innerWidth - 64),
@@ -909,7 +929,7 @@ async function openTerminal(view: ExplorerView, entry: Entry) {
       stopped = true;
       resizeObserver.disconnect();
       xterm?.dispose();
-      void api(`/api/terminals/${encodeURIComponent(created.id)}`, {
+      void api(terminalURL(view, created.id), {
         method: "DELETE",
       });
       return false;
@@ -1100,7 +1120,7 @@ function bindExplorer(view: ExplorerView) {
         explorerClipboard.entry.kind !== "directory");
     (
       menu.querySelector('[data-file-action="terminal"]') as HTMLElement
-    ).hidden = !row || !!view.state.peer;
+    ).hidden = !row;
     (menu.querySelector('[data-file-action="rename"]') as HTMLElement).hidden =
       !row || !!view.state.peer;
     (menu.querySelector('[data-file-action="delete"]') as HTMLElement).hidden =
