@@ -739,6 +739,8 @@ function bindExplorer(view) {
         };
         const menu = $("#file-context-menu");
         menu.querySelector('[data-file-action="trusted-html"]').hidden = !htmlExtensions.has(extension(contextEntry.entry.name));
+        menu.querySelector('[data-file-action="send-peer"]').hidden =
+            contextEntry.entry.kind !== "file" || !!view.state.peer || enrolledPeers.length === 0;
         menu.style.left = `${event.clientX}px`;
         menu.style.top = `${event.clientY}px`;
         menu.hidden = false;
@@ -847,6 +849,24 @@ $("#file-context-menu").addEventListener("click", async (event) => {
     if (!action || !target)
         return;
     try {
+        if (action.dataset.fileAction === "send-peer") {
+            const choices = enrolledPeers.map((peer, index) => `${index + 1}. ${peer.glyph} ${peer.name}`).join("\\n");
+            const choice = window.prompt(`Send to which PC?\\n${choices}`, "1");
+            const peer = enrolledPeers[Number(choice) - 1];
+            if (!peer)
+                return;
+            const roots = await api(`/api/remote/roots?${new URLSearchParams({ peer: peer.url })}`);
+            const rootChoice = window.prompt(`Destination root (0-${Math.max(0, roots.length - 1)}):`, "0");
+            const destinationRoot = Number(rootChoice);
+            if (!Number.isInteger(destinationRoot) || destinationRoot < 0 || destinationRoot >= roots.length)
+                return;
+            const destinationPath = window.prompt("Destination file name:", target.entry.name);
+            if (!destinationPath)
+                return;
+            await api("/api/transfers/send", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ peer: peer.url, sourceRoot: target.view.state.root, sourcePath: target.entry.path, destinationRoot, destinationPath }) });
+            showToast(`Sent ${target.entry.name} to ${peer.name}`, "success");
+            return;
+        }
         if (action.dataset.fileAction === "trusted-html") {
             window.open(fileURL(target.view, target.entry.path), "_blank", "noopener");
             return;
