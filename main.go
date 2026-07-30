@@ -265,6 +265,7 @@ func (s *server) routes() http.Handler {
 	mux.HandleFunc("GET /api/roots", s.handleRoots)
 	mux.HandleFunc("GET /api/peers", s.handlePeers)
 	mux.HandleFunc("POST /api/transfers", s.handleTransferCreate)
+	mux.HandleFunc("POST /api/transfers/send", s.handleTransferSend)
 	mux.HandleFunc("GET /api/transfers/{id}", s.handleTransferStatus)
 	mux.HandleFunc("PUT /api/transfers/{id}/chunks/{chunk}", s.handleTransferChunk)
 	mux.HandleFunc("POST /api/transfers/{id}/finalize", s.handleTransferFinalize)
@@ -318,6 +319,52 @@ func (s *server) handleStatePut(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+func (s *server) handleTransferSend(w http.ResponseWriter, r *http.Request) {
+	if s.peers == nil {
+		writeError(w, errors.New("peer inventory is unavailable"))
+		return
+	}
+	var request struct {
+		Peer            string `json:"peer"`
+		SourceRoot      int    `json:"sourceRoot"`
+		SourcePath      string `json:"sourcePath"`
+		DestinationRoot int    `json:"destinationRoot"`
+		DestinationPath string `json:"destinationPath"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&request); err != nil {
+		writeError(w, err)
+		return
+	}
+	peer, found, err := s.peers.Find(request.Peer)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	if !found {
+		writeError(w, errors.New("unknown peer"))
+		return
+	}
+	sourceRequest, _ := http.NewRequest(http.MethodGet, "/?"+url.Values{"root": {strconv.Itoa(request.SourceRoot)}, "path": {request.SourcePath}}.Encode(), nil)
+	_, source, _, err := s.target(sourceRequest)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	info, err := os.Stat(source)
+	if err != nil || !info.Mode().IsRegular() {
+		writeError(w, errors.New("source is not a regular file"))
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Minute)
+	defer cancel()
+	id, err := transfer.SendFile(ctx, &http.Client{Timeout: 30 * time.Second}, peer.URL, request.DestinationRoot, request.DestinationPath, source)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, map[string]string{"id": id})
 }
 
 func (s *server) handleTransferCreate(w http.ResponseWriter, r *http.Request) {

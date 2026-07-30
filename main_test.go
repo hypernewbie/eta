@@ -30,6 +30,41 @@ func TestMediaTypes(t *testing.T) {
 	}
 }
 
+func TestCoordinatorStartsDirectPeerTransfer(t *testing.T) {
+	sourceRoot, destinationRoot := t.TempDir(), t.TempDir()
+	coordinator, err := newServer([]string{sourceRoot})
+	if err != nil {
+		t.Fatal(err)
+	}
+	receiver, err := newServer([]string{destinationRoot})
+	if err != nil {
+		t.Fatal(err)
+	}
+	receiver.transfers, err = transfer.NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	peer := httptest.NewServer(receiver.routes())
+	defer peer.Close()
+	coordinator.peers = peers.New(filepath.Join(t.TempDir(), "peers.json"))
+	if err := coordinator.peers.Add(peers.Peer{URL: peer.URL}); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sourceRoot, "source.bin"), []byte("eta"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	payload := bytes.NewBufferString(`{"peer":"` + peer.URL + `","sourceRoot":0,"sourcePath":"source.bin","destinationRoot":0,"destinationPath":"received.bin"}`)
+	response := httptest.NewRecorder()
+	coordinator.routes().ServeHTTP(response, httptest.NewRequest("POST", "/api/transfers/send", payload))
+	if response.Code != http.StatusCreated {
+		t.Fatalf("send=%d %s", response.Code, response.Body.String())
+	}
+	got, err := os.ReadFile(filepath.Join(destinationRoot, "received.bin"))
+	if err != nil || string(got) != "eta" {
+		t.Fatalf("got=%q err=%v", got, err)
+	}
+}
+
 func TestDirectTransferBetweenEtaInstances(t *testing.T) {
 	sourceRoot, destinationRoot := t.TempDir(), t.TempDir()
 	sender, err := newServer([]string{sourceRoot})
