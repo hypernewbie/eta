@@ -721,6 +721,41 @@ async function renderPreview(
   return { rawText, binary };
 }
 
+async function openTerminal(view: ExplorerView, entry: Entry) {
+  const created = await api("/api/terminals", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ root: view.state.root, path: entry.path, columns: 120, rows: 32 }),
+  });
+  const panel = document.createElement("section");
+  panel.className = "terminal-panel";
+  const output = document.createElement("pre");
+  output.className = "terminal-output";
+  const input = document.createElement("input");
+  input.className = "terminal-input";
+  input.placeholder = "Type a command and press Enter";
+  panel.append(output, input);
+  let offset = 0;
+  let stopped = false;
+  const refresh = async () => {
+    if (stopped) return;
+    try {
+      const result = await api(`/api/terminals/${encodeURIComponent(created.id)}?offset=${offset}`);
+      if (result.output) { output.textContent += result.output; output.scrollTop = output.scrollHeight; }
+      offset = result.offset;
+      if (result.closed) { stopped = true; input.disabled = true; return; }
+    } catch { stopped = true; input.disabled = true; return; }
+    window.setTimeout(refresh, 180);
+  };
+  input.addEventListener("keydown", async (event) => {
+    if (event.key !== "Enter" || input.disabled) return;
+    const command = input.value; input.value = "";
+    await api(`/api/terminals/${encodeURIComponent(created.id)}/input`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ input: `${command}\\n` }) });
+  });
+  const terminal = new window.WinBox({ title: hostWindowTitle(`Terminal — ${entry.name}`), mount: panel, class: "eta-window", x: "center", y: "center", width: Math.min(980, window.innerWidth - 64), height: Math.min(640, window.innerHeight - 120), bottom: 40, onclose: () => { stopped = true; void api(`/api/terminals/${encodeURIComponent(created.id)}`, { method: "DELETE" }); return false; } });
+  terminal.focus(); input.focus(); void refresh();
+}
+
 async function openInspector(
   view: ExplorerView,
   entry: Entry,
@@ -870,6 +905,7 @@ function bindExplorer(view: ExplorerView) {
     ).hidden = !htmlExtensions.has(extension(contextEntry.entry.name));
     (menu.querySelector('[data-file-action="send-peer"]') as HTMLElement).hidden =
       contextEntry.entry.kind !== "file" || !!view.state.peer || enrolledPeers.length === 0;
+    (menu.querySelector('[data-file-action="terminal"]') as HTMLElement).hidden = !!view.state.peer;
     menu.style.left = `${event.clientX}px`;
     menu.style.top = `${event.clientY}px`;
     menu.hidden = false;
@@ -981,6 +1017,10 @@ $("#file-context-menu").addEventListener("click", async (event) => {
   contextEntry = null;
   if (!action || !target) return;
   try {
+    if (action.dataset.fileAction === "terminal") {
+      await openTerminal(target.view, target.entry);
+      return;
+    }
     if (action.dataset.fileAction === "send-peer") {
       const choices = enrolledPeers.map((peer, index) => `${index + 1}. ${peer.glyph} ${peer.name}`).join("\\n");
       const choice = window.prompt(`Send to which PC?\\n${choices}`, "1");
