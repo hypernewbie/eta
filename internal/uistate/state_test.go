@@ -9,7 +9,7 @@ import (
 func TestStoreRoundTrip(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "eta", "state.json")
 	store := New(path)
-	want := State{Windows: []Window{{Kind: "explorer", Root: 1, Path: "docs", X: 10, Y: 20, Width: 800, Height: 600}, {Kind: "file", Root: 1, Path: "docs/a.md", Maximized: true}}}
+	want := State{Windows: []Window{{Kind: "explorer", Root: 1, Path: "docs", Peer: "http://peer.example:7080", X: 10, Y: 20, Width: 800, Height: 600}, {Kind: "file", Root: 1, Path: "docs/a.md", Maximized: true}}}
 	if err := store.Save(want); err != nil {
 		t.Fatal(err)
 	}
@@ -17,7 +17,7 @@ func TestStoreRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Version != Version || len(got.Windows) != 2 || got.Windows[1].Path != "docs/a.md" {
+	if got.Version != Version || len(got.Windows) != 2 || got.Windows[0].Peer != "http://peer.example:7080" || got.Windows[1].Path != "docs/a.md" {
 		t.Fatalf("unexpected state: %#v", got)
 	}
 }

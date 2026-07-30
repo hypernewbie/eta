@@ -17,6 +17,7 @@ type Window struct {
 	Kind      string `json:"kind"`
 	Root      int    `json:"root,omitempty"`
 	Path      string `json:"path,omitempty"`
+	Peer      string `json:"peer,omitempty"`
 	X         int    `json:"x,omitempty"`
 	Y         int    `json:"y,omitempty"`
 	Width     int    `json:"width,omitempty"`
@@ -116,7 +117,7 @@ func validate(state State) error {
 		if window.Kind != "explorer" && window.Kind != "file" {
 			return fmt.Errorf("unknown window kind %q", window.Kind)
 		}
-		if window.Root < 0 || strings.HasPrefix(window.Path, "/") || strings.Contains(window.Path, "\\") {
+		if window.Root < 0 || strings.HasPrefix(window.Path, "/") || strings.Contains(window.Path, "\\") || (window.Peer != "" && (len(window.Peer) > 2048 || !strings.HasPrefix(window.Peer, "http"))) {
 			return fmt.Errorf("invalid window path")
 		}
 		if window.Kind == "file" && window.Path == "" {

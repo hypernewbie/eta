@@ -444,6 +444,7 @@ async function openExplorerWindow(restored, peer = null) {
             kind: "explorer",
             root: view.state.root,
             path: view.state.path,
+            peer: view.state.peer?.url,
         }),
     });
     explorerViews.set(key, view);
@@ -661,7 +662,7 @@ async function openInspector(view, entry, restored) {
     const WinBox = window.WinBox;
     if (!WinBox)
         return;
-    const key = `file:${view.state.root}:${entry.path}`;
+    const key = `file:${view.state.peer?.url || "local"}:${view.state.root}:${entry.path}`;
     if (desktopWindows.has(key)) {
         focusDesktopWindow(key);
         return;
@@ -679,10 +680,13 @@ async function openInspector(view, entry, restored) {
         refreshTaskStrip();
         scheduleDesktopSave();
     };
+    const peer = view.state.peer;
+    if (peer)
+        panel.style.setProperty("--window-accent", COLORS[peer.accent]?.accent || "#7c6af7");
     const inspector = new WinBox({
-        title: hostWindowTitle(entry.name),
+        title: peer ? `${peer.glyph} ${entry.name}` : hostWindowTitle(entry.name),
         mount: panel,
-        class: "eta-window",
+        class: peer ? "eta-window peer-window" : "eta-window",
         x: restored ? restored.x : "center",
         y: restored ? restored.y : "center",
         width: restored?.width ?? Math.min(1180, window.innerWidth - 64),
@@ -702,9 +706,9 @@ async function openInspector(view, entry, restored) {
         onminimize: windowChanged,
     });
     desktopWindows.set(key, {
-        title: hostWindowTitle(entry.name),
+        title: peer ? `${peer.glyph} ${entry.name}` : hostWindowTitle(entry.name),
         window: inspector,
-        state: () => ({ kind: "file", root: view.state.root, path: entry.path }),
+        state: () => ({ kind: "file", root: view.state.root, path: entry.path, peer: peer?.url }),
     });
     refreshTaskStrip();
     scheduleDesktopSave();
@@ -855,10 +859,13 @@ async function loadDesktopState() {
 }
 async function restoreFileWindow(restored) {
     try {
-        const result = await api(`/api/list?${new URLSearchParams({ root: String(restored.root), path: restored.path || "" })}`);
+        const peer = restored.peer ? enrolledPeers.find((candidate) => candidate.url === restored.peer) || null : null;
+        if (restored.peer && !peer)
+            return;
+        const view = { state: { root: restored.root, peer } };
+        const result = await api(sourceURL(view, "list", { root: String(restored.root), path: restored.path || "" }));
         if (result.entry?.kind !== "file")
             return;
-        const view = { state: { root: restored.root } };
         await openInspector(view, result.entry, restored);
     }
     catch {
@@ -884,8 +891,12 @@ async function boot() {
         restoringDesktop = true;
         const explorers = restored.filter((window) => window.kind === "explorer");
         if (explorers.length) {
-            for (const window of explorers)
-                await openExplorerWindow(window);
+            for (const window of explorers) {
+                const peer = window.peer ? enrolledPeers.find((candidate) => candidate.url === window.peer) || null : null;
+                if (window.peer && !peer)
+                    continue;
+                await openExplorerWindow(window, peer);
+            }
         }
         else {
             await openExplorerWindow();
