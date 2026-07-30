@@ -990,16 +990,12 @@ iconify-icon.entry-icon {
 .terminal-xterm .xterm {
   height: 100%;
 }
-/* Peer identity is the one deliberate exception to neutral desktop chrome. */
-.peer-window .wb-header::before {
+/* Windows carry their source computer's identity; the desktop around them stays neutral. */
+.identity-window .wb-header::before {
   background: var(--window-accent);
   box-shadow: 0 0 10px var(--window-accent);
 }
-.peer-window .wb-title,
-.peer-launcher .peer-glyph {
-  color: var(--window-accent, var(--accent-bright));
-}
-.peer-launcher::part(base) {
+.identity-window .wb-title {
   color: var(--window-accent, var(--accent-bright));
 }
 .winbox.focus {

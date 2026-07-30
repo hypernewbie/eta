@@ -52,6 +52,7 @@ type WinBoxInstance = {
   height: number;
   min: boolean;
   max: boolean;
+  window?: HTMLElement;
 };
 
 declare const dayjs: any;
@@ -391,6 +392,14 @@ function setTheme(name: string, persist = true) {
 function hostWindowTitle(title: string) {
   return `${localHost.glyph} ${title}`;
 }
+function windowAccent(peer: Peer | null) {
+  return peer
+    ? COLORS[peer.accent]?.accent || "#7c6af7"
+    : "var(--identity-accent)";
+}
+function colorWindow(instance: WinBoxInstance, peer: Peer | null) {
+  instance.window?.style.setProperty("--window-accent", windowAccent(peer));
+}
 async function loadLocalHost() {
   const identity = (await api("/api/identity")) as HostIdentity;
   localHost = identity;
@@ -616,11 +625,6 @@ async function openExplorerWindow(
     ? `${peer.glyph} ${explorerName}`
     : hostWindowTitle(explorerName);
   const panel = createExplorerPanel();
-  if (peer)
-    panel.style.setProperty(
-      "--window-accent",
-      COLORS[peer.accent]?.accent || "#7c6af7",
-    );
   const view = createExplorerView(key, panel);
   view.state.peer = peer;
   const windowChanged = () => {
@@ -630,7 +634,9 @@ async function openExplorerWindow(
   const explorer = new window.WinBox({
     title,
     mount: panel,
-    class: peer ? "eta-window peer-window" : "eta-window",
+    class: peer
+      ? "eta-window identity-window peer-window"
+      : "eta-window identity-window",
     x: restored ? restored.x : "center",
     y: restored?.y ?? 64,
     width:
@@ -655,6 +661,7 @@ async function openExplorerWindow(
     onrestore: windowChanged,
     onminimize: windowChanged,
   });
+  colorWindow(explorer, peer);
   desktopWindows.set(key, {
     title,
     window: explorer,
@@ -853,11 +860,6 @@ async function openTerminal(view: ExplorerView, entry: Entry) {
   });
   const panel = document.createElement("section");
   panel.className = "terminal-panel";
-  if (view.state.peer)
-    panel.style.setProperty(
-      "--window-accent",
-      COLORS[view.state.peer.accent]?.accent || "#7c6af7",
-    );
   const terminalHost = document.createElement("div");
   terminalHost.className = "terminal-xterm";
   panel.append(terminalHost);
@@ -926,7 +928,9 @@ async function openTerminal(view: ExplorerView, entry: Entry) {
       ? `${view.state.peer.glyph} Terminal — ${entry.name}`
       : hostWindowTitle(`Terminal — ${entry.name}`),
     mount: panel,
-    class: view.state.peer ? "eta-window peer-window" : "eta-window",
+    class: view.state.peer
+      ? "eta-window identity-window peer-window"
+      : "eta-window identity-window",
     x: "center",
     y: "center",
     width: Math.min(980, window.innerWidth - 64),
@@ -945,6 +949,7 @@ async function openTerminal(view: ExplorerView, entry: Entry) {
       return false;
     },
   });
+  colorWindow(terminal, view.state.peer);
   terminal.focus();
   sendResize();
   xterm?.focus();
@@ -977,15 +982,12 @@ async function openInspector(
     scheduleDesktopSave();
   };
   const peer = view.state.peer;
-  if (peer)
-    panel.style.setProperty(
-      "--window-accent",
-      COLORS[peer.accent]?.accent || "#7c6af7",
-    );
   const inspector = new WinBox({
     title: peer ? `${peer.glyph} ${entry.name}` : hostWindowTitle(entry.name),
     mount: panel,
-    class: peer ? "eta-window peer-window" : "eta-window",
+    class: peer
+      ? "eta-window identity-window peer-window"
+      : "eta-window identity-window",
     x: restored ? restored.x : "center",
     y: restored ? restored.y : "center",
     width: restored?.width ?? Math.min(1180, window.innerWidth - 64),
@@ -1004,6 +1006,7 @@ async function openInspector(
     onrestore: windowChanged,
     onminimize: windowChanged,
   });
+  colorWindow(inspector, peer);
   desktopWindows.set(key, {
     title: peer ? `${peer.glyph} ${entry.name}` : hostWindowTitle(entry.name),
     window: inspector,
