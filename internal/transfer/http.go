@@ -15,6 +15,12 @@ import (
 // SendFile transfers source directly to an Eta peer, resuming only its missing
 // verified chunks. The coordinator need not proxy file bytes.
 func SendFile(ctx context.Context, client *http.Client, baseURL string, root int, destination, source string) (string, error) {
+	return SendFileWithProgress(ctx, client, baseURL, root, destination, source, nil)
+}
+
+// SendFileWithProgress reports each peer-acknowledged chunk. A nil callback
+// leaves the protocol behavior identical to SendFile.
+func SendFileWithProgress(ctx context.Context, client *http.Client, baseURL string, root int, destination, source string, progress func(completed, total int)) (string, error) {
 	file, err := os.Open(source)
 	if err != nil {
 		return "", err
@@ -52,6 +58,10 @@ func SendFile(ctx context.Context, client *http.Client, baseURL string, root int
 		return "", err
 	}
 	defer file.Close()
+	completed := len(manifest.Chunks) - len(status.Missing)
+	if progress != nil {
+		progress(completed, len(manifest.Chunks))
+	}
 	for _, index := range status.Missing {
 		length, err := manifest.ChunkLength(index)
 		if err != nil {
@@ -63,6 +73,10 @@ func SendFile(ctx context.Context, client *http.Client, baseURL string, root int
 		}
 		if err = requestJSON(ctx, client, http.MethodPut, fmt.Sprintf("%s/%s/chunks/%d", endpoint, created.ID, index), bytes.NewReader(body), nil); err != nil {
 			return "", err
+		}
+		completed++
+		if progress != nil {
+			progress(completed, len(manifest.Chunks))
 		}
 	}
 	finish, _ := json.Marshal(map[string]any{"root": root, "path": destination})

@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/hypernewbie/eta/internal/diskcache"
 	"github.com/hypernewbie/eta/internal/peers"
@@ -56,8 +57,29 @@ func TestCoordinatorStartsDirectPeerTransfer(t *testing.T) {
 	payload := bytes.NewBufferString(`{"peer":"` + peer.URL + `","sourceRoot":0,"sourcePath":"source.bin","destinationRoot":0,"destinationPath":"received.bin"}`)
 	response := httptest.NewRecorder()
 	coordinator.routes().ServeHTTP(response, httptest.NewRequest("POST", "/api/transfers/send", payload))
-	if response.Code != http.StatusCreated {
+	if response.Code != http.StatusAccepted {
 		t.Fatalf("send=%d %s", response.Code, response.Body.String())
+	}
+	var job transfer.Job
+	if err := json.NewDecoder(response.Body).Decode(&job); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		current, found := coordinator.transferJobs.Get(job.ID)
+		if !found {
+			t.Fatal("job missing")
+		}
+		if current.Done {
+			if current.Error != "" {
+				t.Fatal(current.Error)
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("transfer did not finish")
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 	got, err := os.ReadFile(filepath.Join(destinationRoot, "received.bin"))
 	if err != nil || string(got) != "eta" {

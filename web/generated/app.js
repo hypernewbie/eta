@@ -919,8 +919,21 @@ $("#file-context-menu").addEventListener("click", async (event) => {
             const destinationPath = window.prompt("Destination file name:", target.entry.name);
             if (!destinationPath)
                 return;
-            await api("/api/transfers/send", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ peer: peer.url, sourceRoot: target.view.state.root, sourcePath: target.entry.path, destinationRoot, destinationPath }) });
-            showToast(`Sent ${target.entry.name} to ${peer.name}`, "success");
+            const job = await api("/api/transfers/send", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ peer: peer.url, sourceRoot: target.view.state.root, sourcePath: target.entry.path, destinationRoot, destinationPath }) });
+            showToast(`Sending ${target.entry.name} to ${peer.name}…`);
+            const poll = async () => {
+                const status = await api(`/api/transfer-jobs/${encodeURIComponent(job.id)}`);
+                if (!status.done) {
+                    window.setTimeout(() => void poll(), 300);
+                    return;
+                }
+                if (status.error) {
+                    showToast(`Transfer failed: ${status.error}`);
+                    return;
+                }
+                showToast(`Sent ${target.entry.name} to ${peer.name}`, "success");
+            };
+            void poll();
             return;
         }
         if (action.dataset.fileAction === "trusted-html") {

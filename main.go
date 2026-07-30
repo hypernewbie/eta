@@ -56,16 +56,17 @@ type root struct {
 }
 
 type server struct {
-	roots       []root
-	web         fs.FS
-	thumbs      *thumbnailCache
-	identity    hostid.Identity
-	state       *uistate.Store
-	peers       *peers.Store
-	remoteCache *diskcache.Cache
-	hotRanges   *rangecache.Cache
-	transfers   *transfer.Store
-	terminals   *terminal.Manager
+	roots        []root
+	web          fs.FS
+	thumbs       *thumbnailCache
+	identity     hostid.Identity
+	state        *uistate.Store
+	peers        *peers.Store
+	remoteCache  *diskcache.Cache
+	hotRanges    *rangecache.Cache
+	transfers    *transfer.Store
+	transferJobs *transfer.Jobs
+	terminals    *terminal.Manager
 }
 
 type entry struct {
@@ -231,7 +232,7 @@ func newServer(paths []string) (*server, error) {
 	if err != nil {
 		return nil, fmt.Errorf("load embedded web assets: %w", err)
 	}
-	s := &server{web: web, identity: hostid.For("test-host", "eta"), terminals: terminal.NewManager()}
+	s := &server{web: web, identity: hostid.For("test-host", "eta"), terminals: terminal.NewManager(), transferJobs: transfer.NewJobs()}
 	seen := map[string]bool{}
 	for _, path := range paths {
 		absolute, err := filepath.Abs(path)
@@ -273,6 +274,7 @@ func (s *server) routes() http.Handler {
 	mux.HandleFunc("DELETE /api/terminals/{id}", s.handleTerminalClose)
 	mux.HandleFunc("POST /api/transfers", s.handleTransferCreate)
 	mux.HandleFunc("POST /api/transfers/send", s.handleTransferSend)
+	mux.HandleFunc("GET /api/transfer-jobs/{id}", s.handleTransferJob)
 	mux.HandleFunc("GET /api/transfers/{id}", s.handleTransferStatus)
 	mux.HandleFunc("PUT /api/transfers/{id}/chunks/{chunk}", s.handleTransferChunk)
 	mux.HandleFunc("POST /api/transfers/{id}/finalize", s.handleTransferFinalize)
@@ -459,14 +461,40 @@ func (s *server) handleTransferSend(w http.ResponseWriter, r *http.Request) {
 		writeError(w, errors.New("source is not a regular file"))
 		return
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Minute)
-	defer cancel()
-	id, err := transfer.SendFile(ctx, &http.Client{Timeout: 30 * time.Second}, peer.URL, request.DestinationRoot, request.DestinationPath, source)
+	if s.transferJobs == nil {
+		s.transferJobs = transfer.NewJobs()
+	}
+	manifestFile, err := os.Open(source)
 	if err != nil {
 		writeError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusCreated, map[string]string{"id": id})
+	manifest, err := transfer.BuildManifest(manifestFile, transfer.DefaultChunkSize)
+	_ = manifestFile.Close()
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	job := s.transferJobs.Start(len(manifest.Chunks))
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+		defer cancel()
+		_, err := transfer.SendFileWithProgress(ctx, &http.Client{Timeout: 30 * time.Second}, peer.URL, request.DestinationRoot, request.DestinationPath, source, func(completed, _ int) { s.transferJobs.Progress(job.ID, completed) })
+		s.transferJobs.Finish(job.ID, err)
+	}()
+	writeJSON(w, http.StatusAccepted, job)
+}
+func (s *server) handleTransferJob(w http.ResponseWriter, r *http.Request) {
+	if s.transferJobs == nil {
+		writeError(w, errors.New("transfer service is unavailable"))
+		return
+	}
+	job, found := s.transferJobs.Get(r.PathValue("id"))
+	if !found {
+		writeError(w, errors.New("unknown transfer"))
+		return
+	}
+	writeJSON(w, http.StatusOK, job)
 }
 
 func (s *server) handleTransferCreate(w http.ResponseWriter, r *http.Request) {
