@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -26,6 +27,36 @@ func TestMediaTypes(t *testing.T) {
 		if got := mediaType(name); got != want {
 			t.Errorf("mediaType(%q) = %q, want %q", name, got, want)
 		}
+	}
+}
+
+func TestDirectTransferBetweenEtaInstances(t *testing.T) {
+	sourceRoot, destinationRoot := t.TempDir(), t.TempDir()
+	sender, err := newServer([]string{sourceRoot})
+	if err != nil {
+		t.Fatal(err)
+	}
+	receiver, err := newServer([]string{destinationRoot})
+	if err != nil {
+		t.Fatal(err)
+	}
+	receiver.transfers, err = transfer.NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	peer := httptest.NewServer(receiver.routes())
+	defer peer.Close()
+	sourcePath := filepath.Join(sender.roots[0].Path, "source.bin")
+	body := []byte("eta direct transfer")
+	if err := os.WriteFile(sourcePath, body, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := transfer.SendFile(context.Background(), peer.Client(), peer.URL, 0, "received.bin", sourcePath); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(filepath.Join(destinationRoot, "received.bin"))
+	if err != nil || string(got) != string(body) {
+		t.Fatalf("got=%q err=%v", got, err)
 	}
 }
 
