@@ -908,9 +908,9 @@ function bindExplorer(view: ExplorerView) {
       menu.querySelector('[data-file-action="trusted-html"]') as HTMLElement
     ).hidden = !htmlExtensions.has(extension(contextEntry.entry.name));
     (menu.querySelector('[data-file-action="copy"]') as HTMLElement).hidden =
-      contextEntry.entry.kind !== "file" || !!view.state.peer;
+      contextEntry.entry.kind !== "file";
     (menu.querySelector('[data-file-action="paste"]') as HTMLElement).hidden =
-      contextEntry.entry.kind !== "directory" || !explorerClipboard || !!explorerClipboard.view.state.peer;
+      contextEntry.entry.kind !== "directory" || !explorerClipboard || explorerClipboard.entry.kind !== "file";
     (menu.querySelector('[data-file-action="terminal"]') as HTMLElement).hidden = !!view.state.peer;
     menu.style.left = `${event.clientX}px`;
     menu.style.top = `${event.clientY}px`;
@@ -1014,23 +1014,43 @@ async function boot() {
   iconify();
 }
 
+async function monitorCopy(jobID: string, sourcePeer: Peer | undefined, source: ExplorerEntry, destination: ExplorerEntry) {
+  const poll = async () => {
+    const endpoint = sourcePeer
+      ? `/api/remote/transfer-jobs?${new URLSearchParams({ peer: sourcePeer.url, id: jobID })}`
+      : `/api/transfer-jobs/${encodeURIComponent(jobID)}`;
+    const status = await api(endpoint);
+    if (!status.done) { window.setTimeout(() => void poll(), 300); return; }
+    if (status.error) { showToast(`Copy failed: ${status.error}`); return; }
+    showToast(`Copied ${source.entry.name}`, "success");
+    await navigate(destination.view, destination.view.state.path);
+  };
+  void poll();
+}
+
 async function pasteIntoFolder(destination: ExplorerEntry) {
   const source = explorerClipboard;
-  if (!source || source.entry.kind !== "file" || source.view.state.peer) return;
+  if (!source || source.entry.kind !== "file") return;
   const destinationPath = destination.entry.path
     ? `${destination.entry.path}/${source.entry.name}`
     : source.entry.name;
-  if (!destination.view.state.peer) {
+  const sourcePeer = source.view.state.peer;
+  const destinationPeer = destination.view.state.peer;
+  if (!sourcePeer && !destinationPeer) {
     await api("/api/copy", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sourceRoot: source.view.state.root, sourcePath: source.entry.path, destinationRoot: destination.view.state.root, destinationPath }) });
     showToast(`Copied ${source.entry.name}`, "success");
     await navigate(destination.view, destination.view.state.path);
     return;
   }
-  const peer = destination.view.state.peer;
-  const job = await api("/api/transfers/send", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ peer: peer.url, sourceRoot: source.view.state.root, sourcePath: source.entry.path, destinationRoot: destination.view.state.root, destinationPath }) });
+  if (!sourcePeer) {
+    const job = await api("/api/transfers/send", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ peer: destinationPeer!.url, sourceRoot: source.view.state.root, sourcePath: source.entry.path, destinationRoot: destination.view.state.root, destinationPath }) });
+    showToast(`Copying ${source.entry.name}…`);
+    await monitorCopy(job.id, undefined, source, destination);
+    return;
+  }
+  const job = await api("/api/remote/transfers/send", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sourcePeer: sourcePeer.url, destinationPeer: destinationPeer?.url || "", sourceRoot: source.view.state.root, sourcePath: source.entry.path, destinationRoot: destination.view.state.root, destinationPath }) });
   showToast(`Copying ${source.entry.name}…`);
-  const poll = async () => { const status = await api(`/api/transfer-jobs/${encodeURIComponent(job.id)}`); if (!status.done) { window.setTimeout(() => void poll(), 300); return; }; if (status.error) { showToast(`Copy failed: ${status.error}`); return; }; showToast(`Copied ${source.entry.name}`, "success"); await navigate(destination.view, destination.view.state.path); };
-  void poll();
+  await monitorCopy(job.id, sourcePeer, source, destination);
 }
 
 $("#file-context-menu").addEventListener("click", async (event) => {

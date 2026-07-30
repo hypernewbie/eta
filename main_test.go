@@ -31,6 +31,69 @@ func TestMediaTypes(t *testing.T) {
 	}
 }
 
+func TestCoordinatorAsksPeerToTransferDirectly(t *testing.T) {
+	sourceRoot, destinationRoot := t.TempDir(), t.TempDir()
+	source, err := newServer([]string{sourceRoot})
+	if err != nil {
+		t.Fatal(err)
+	}
+	receiver, err := newServer([]string{destinationRoot})
+	if err != nil {
+		t.Fatal(err)
+	}
+	receiver.transfers, err = transfer.NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	receiverHTTP := httptest.NewServer(receiver.routes())
+	defer receiverHTTP.Close()
+	sourceHTTP := httptest.NewServer(source.routes())
+	defer sourceHTTP.Close()
+	coordinator, err := newServer([]string{t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	coordinator.advertiseURL = receiverHTTP.URL
+	coordinator.peers = peers.New(filepath.Join(t.TempDir(), "peers.json"))
+	if err := coordinator.peers.Add(peers.Peer{URL: sourceHTTP.URL}); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sourceRoot, "source.bin"), []byte("eta"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	payload := bytes.NewBufferString(`{"sourcePeer":"` + sourceHTTP.URL + `","sourceRoot":0,"sourcePath":"source.bin","destinationRoot":0,"destinationPath":"received.bin"}`)
+	response := httptest.NewRecorder()
+	coordinator.routes().ServeHTTP(response, httptest.NewRequest("POST", "/api/remote/transfers/send", payload))
+	if response.Code != http.StatusAccepted {
+		t.Fatalf("send=%d %s", response.Code, response.Body.String())
+	}
+	var job struct{ Peer, ID string }
+	if err := json.NewDecoder(response.Body).Decode(&job); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		current, found := source.transferJobs.Get(job.ID)
+		if !found {
+			t.Fatal("job missing")
+		}
+		if current.Done {
+			if current.Error != "" {
+				t.Fatal(current.Error)
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("transfer did not finish")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	body, err := os.ReadFile(filepath.Join(destinationRoot, "received.bin"))
+	if err != nil || string(body) != "eta" {
+		t.Fatalf("body=%q err=%v", body, err)
+	}
+}
+
 func TestCoordinatorStartsDirectPeerTransfer(t *testing.T) {
 	sourceRoot, destinationRoot := t.TempDir(), t.TempDir()
 	coordinator, err := newServer([]string{sourceRoot})

@@ -67,6 +67,7 @@ type server struct {
 	transfers    *transfer.Store
 	transferJobs *transfer.Jobs
 	terminals    *terminal.Manager
+	advertiseURL string
 }
 
 type entry struct {
@@ -91,6 +92,7 @@ func main() {
 	remoteCacheSize := flag.String("remote-cache-size", "4GB", "maximum remote byte-range cache size")
 	hotRangeCacheSize := flag.String("hot-range-cache-size", "64MB", "maximum RAM used by hot remote ranges")
 	transferDir := flag.String("transfer-dir", "", "directory for resumable transfer staging (default: user cache directory)")
+	advertiseURL := flag.String("advertise-url", "", "public http(s) URL peers use to send files here (default: request host)")
 	flag.Var(&roots, "root", "directory to expose (repeatable; defaults to the current directory)")
 	flag.Parse()
 
@@ -124,6 +126,7 @@ func main() {
 		log.Fatal(err)
 	}
 	s.identity = identity
+	s.advertiseURL = strings.TrimSuffix(*advertiseURL, "/")
 	statePath := *stateFile
 	if statePath == "" {
 		statePath, err = uistate.DefaultPath()
@@ -274,6 +277,8 @@ func (s *server) routes() http.Handler {
 	mux.HandleFunc("DELETE /api/terminals/{id}", s.handleTerminalClose)
 	mux.HandleFunc("POST /api/transfers", s.handleTransferCreate)
 	mux.HandleFunc("POST /api/transfers/send", s.handleTransferSend)
+	mux.HandleFunc("POST /api/remote/transfers/send", s.handleRemoteTransferSend)
+	mux.HandleFunc("GET /api/remote/transfer-jobs", s.handleRemoteTransferJob)
 	mux.HandleFunc("GET /api/transfer-jobs/{id}", s.handleTransferJob)
 	mux.HandleFunc("GET /api/transfers/{id}", s.handleTransferStatus)
 	mux.HandleFunc("PUT /api/transfers/{id}/chunks/{chunk}", s.handleTransferChunk)
@@ -427,10 +432,6 @@ func (s *server) terminalSession(w http.ResponseWriter, r *http.Request, action 
 }
 
 func (s *server) handleTransferSend(w http.ResponseWriter, r *http.Request) {
-	if s.peers == nil {
-		writeError(w, errors.New("peer inventory is unavailable"))
-		return
-	}
 	var request struct {
 		Peer            string `json:"peer"`
 		SourceRoot      int    `json:"sourceRoot"`
@@ -442,13 +443,12 @@ func (s *server) handleTransferSend(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	peer, found, err := s.peers.Find(request.Peer)
-	if err != nil {
-		writeError(w, err)
-		return
-	}
-	if !found {
-		writeError(w, errors.New("unknown peer"))
+	// A managed source may not itself keep the coordinator's peer inventory.
+	// Its caller supplies the direct destination URL; the Tailnet/LAN boundary
+	// is the authorization boundary for this capability.
+	peer := peers.Peer{URL: strings.TrimSuffix(request.Peer, "/")}
+	if parsed, err := url.Parse(peer.URL); err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
+		writeError(w, errors.New("invalid destination peer"))
 		return
 	}
 	sourceRequest, _ := http.NewRequest(http.MethodGet, "/?"+url.Values{"root": {strconv.Itoa(request.SourceRoot)}, "path": {request.SourcePath}}.Encode(), nil)
@@ -485,6 +485,112 @@ func (s *server) handleTransferSend(w http.ResponseWriter, r *http.Request) {
 	}()
 	writeJSON(w, http.StatusAccepted, job)
 }
+
+// handleRemoteTransferSend asks an enrolled source host to transfer directly
+// to another Eta location. The coordinator moves control messages only; file
+// chunks still travel from source host to destination host.
+func (s *server) handleRemoteTransferSend(w http.ResponseWriter, r *http.Request) {
+	if s.peers == nil {
+		writeError(w, errors.New("peer inventory is unavailable"))
+		return
+	}
+	var request struct {
+		SourcePeer      string `json:"sourcePeer"`
+		DestinationPeer string `json:"destinationPeer"`
+		SourceRoot      int    `json:"sourceRoot"`
+		SourcePath      string `json:"sourcePath"`
+		DestinationRoot int    `json:"destinationRoot"`
+		DestinationPath string `json:"destinationPath"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&request); err != nil {
+		writeError(w, err)
+		return
+	}
+	source, found, err := s.peers.Find(request.SourcePeer)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	if !found {
+		writeError(w, errors.New("unknown source peer"))
+		return
+	}
+	destinationURL := s.advertiseURL
+	if request.DestinationPeer != "" {
+		destination, found, err := s.peers.Find(request.DestinationPeer)
+		if err != nil {
+			writeError(w, err)
+			return
+		}
+		if !found {
+			writeError(w, errors.New("unknown destination peer"))
+			return
+		}
+		destinationURL = destination.URL
+	}
+	if destinationURL == "" {
+		destinationURL = "http://" + r.Host
+	}
+	destination, err := url.Parse(destinationURL)
+	if err != nil || (destination.Scheme != "http" && destination.Scheme != "https") || destination.Host == "" {
+		writeError(w, errors.New("invalid destination URL"))
+		return
+	}
+	body, err := json.Marshal(map[string]any{"peer": destinationURL, "sourceRoot": request.SourceRoot, "sourcePath": request.SourcePath, "destinationRoot": request.DestinationRoot, "destinationPath": request.DestinationPath})
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	endpoint := strings.TrimSuffix(source.URL, "/") + "/api/transfers/send"
+	response, err := (&http.Client{Timeout: 10 * time.Second}).Post(endpoint, "application/json", strings.NewReader(string(body)))
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusAccepted {
+		data, _ := io.ReadAll(io.LimitReader(response.Body, 64<<10))
+		writeError(w, fmt.Errorf("source transfer request failed: %s: %s", response.Status, strings.TrimSpace(string(data))))
+		return
+	}
+	var job transfer.Job
+	if err := json.NewDecoder(response.Body).Decode(&job); err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusAccepted, map[string]string{"peer": source.URL, "id": job.ID})
+}
+
+func (s *server) handleRemoteTransferJob(w http.ResponseWriter, r *http.Request) {
+	if s.peers == nil {
+		writeError(w, errors.New("peer inventory is unavailable"))
+		return
+	}
+	peer, found, err := s.peers.Find(r.URL.Query().Get("peer"))
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	if !found {
+		writeError(w, errors.New("unknown peer"))
+		return
+	}
+	id := r.URL.Query().Get("id")
+	if id == "" {
+		writeError(w, errors.New("missing transfer job ID"))
+		return
+	}
+	response, err := (&http.Client{Timeout: 10 * time.Second}).Get(strings.TrimSuffix(peer.URL, "/") + "/api/transfer-jobs/" + url.PathEscape(id))
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	defer response.Body.Close()
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, _ = io.Copy(w, response.Body)
+}
+
 func (s *server) handleTransferJob(w http.ResponseWriter, r *http.Request) {
 	if s.transferJobs == nil {
 		writeError(w, errors.New("transfer service is unavailable"))
