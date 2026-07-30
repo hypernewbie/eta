@@ -227,7 +227,9 @@ const COLORS: Record<string, Theme> = {
 };
 
 let dialogView: ExplorerView | null = null;
-let contextEntry: { view: ExplorerView; entry: Entry } | null = null;
+type ExplorerEntry = { view: ExplorerView; entry: Entry };
+let contextEntry: ExplorerEntry | null = null;
+let transferTarget: ExplorerEntry | null = null;
 let explorerSequence = 0;
 let localHost: HostIdentity = {
   id: "local",
@@ -1008,6 +1010,39 @@ async function boot() {
   iconify();
 }
 
+async function openTransferDialog(target: ExplorerEntry) {
+  transferTarget = target;
+  $("#transfer-source").textContent = target.entry.name;
+  const peerSelect = $("#transfer-peer") as any;
+  peerSelect.innerHTML = enrolledPeers.map((peer) => `<sl-option value="${escapeHTML(peer.url)}">${escapeHTML(`${peer.glyph} ${peer.name}`)}</sl-option>`).join("");
+  peerSelect.value = enrolledPeers[0]?.url || "";
+  ($("#transfer-path") as any).value = target.entry.name;
+  await loadTransferRoots();
+  ($("#transfer-dialog") as any).show();
+}
+async function loadTransferRoots() {
+  const peerURL = ($("#transfer-peer") as any).value as string;
+  const rootSelect = $("#transfer-root") as any;
+  rootSelect.innerHTML = "";
+  if (!peerURL) return;
+  const roots = await api(`/api/remote/roots?${new URLSearchParams({ peer: peerURL })}`) as Root[];
+  rootSelect.innerHTML = roots.map((root) => `<sl-option value="${root.id}">${escapeHTML(root.name)}</sl-option>`).join("");
+  rootSelect.value = String(roots[0]?.id ?? "");
+}
+async function startTransfer() {
+  const target = transferTarget; if (!target) return;
+  const peerURL = ($("#transfer-peer") as any).value as string;
+  const destinationRoot = Number(($("#transfer-root") as any).value);
+  const destinationPath = (($("#transfer-path") as any).value as string).trim();
+  const peer = enrolledPeers.find((candidate) => candidate.url === peerURL);
+  if (!peer || !Number.isInteger(destinationRoot) || !destinationPath) return;
+  ($("#transfer-dialog") as any).hide();
+  const job = await api("/api/transfers/send", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ peer: peer.url, sourceRoot: target.view.state.root, sourcePath: target.entry.path, destinationRoot, destinationPath }) });
+  showToast(`Sending ${target.entry.name} to ${peer.name}…`);
+  const poll = async () => { const status = await api(`/api/transfer-jobs/${encodeURIComponent(job.id)}`); if (!status.done) { window.setTimeout(() => void poll(), 300); return; }; if (status.error) { showToast(`Transfer failed: ${status.error}`); return; }; showToast(`Sent ${target.entry.name} to ${peer.name}`, "success"); };
+  void poll(); transferTarget = null;
+}
+
 $("#file-context-menu").addEventListener("click", async (event) => {
   const action = (event.target as HTMLElement).closest(
     "[data-file-action]",
@@ -1022,25 +1057,7 @@ $("#file-context-menu").addEventListener("click", async (event) => {
       return;
     }
     if (action.dataset.fileAction === "send-peer") {
-      const choices = enrolledPeers.map((peer, index) => `${index + 1}. ${peer.glyph} ${peer.name}`).join("\\n");
-      const choice = window.prompt(`Send to which PC?\\n${choices}`, "1");
-      const peer = enrolledPeers[Number(choice) - 1];
-      if (!peer) return;
-      const roots = await api(`/api/remote/roots?${new URLSearchParams({ peer: peer.url })}`) as Root[];
-      const rootChoice = window.prompt(`Destination root (0-${Math.max(0, roots.length - 1)}):`, "0");
-      const destinationRoot = Number(rootChoice);
-      if (!Number.isInteger(destinationRoot) || destinationRoot < 0 || destinationRoot >= roots.length) return;
-      const destinationPath = window.prompt("Destination file name:", target.entry.name);
-      if (!destinationPath) return;
-      const job = await api("/api/transfers/send", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ peer: peer.url, sourceRoot: target.view.state.root, sourcePath: target.entry.path, destinationRoot, destinationPath }) });
-      showToast(`Sending ${target.entry.name} to ${peer.name}…`);
-      const poll = async () => {
-        const status = await api(`/api/transfer-jobs/${encodeURIComponent(job.id)}`);
-        if (!status.done) { window.setTimeout(() => void poll(), 300); return; }
-        if (status.error) { showToast(`Transfer failed: ${status.error}`); return; }
-        showToast(`Sent ${target.entry.name} to ${peer.name}`, "success");
-      };
-      void poll();
+      await openTransferDialog(target);
       return;
     }
     if (action.dataset.fileAction === "trusted-html") {
@@ -1082,6 +1099,9 @@ $("#file-context-menu").addEventListener("click", async (event) => {
     showToast((error as Error).message);
   }
 });
+$("#transfer-peer").addEventListener("sl-change", () => void loadTransferRoots());
+$("#transfer-cancel").addEventListener("click", () => { transferTarget = null; ($("#transfer-dialog") as any).hide(); });
+$("#transfer-start").addEventListener("click", () => void startTransfer());
 document.addEventListener("pointerdown", (event) => {
   if (!(event.target as HTMLElement).closest("#file-context-menu"))
     $("#file-context-menu").hidden = true;

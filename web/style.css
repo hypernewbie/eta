@@ -908,6 +908,15 @@ iconify-icon.entry-icon {
     inset 0 -1px 0 rgba(0, 0, 0, 0.72);
   backdrop-filter: blur(26px) saturate(175%);
 }
+.transfer-dialog sl-select,
+.transfer-dialog sl-input {
+  display: block;
+  margin: 12px 0;
+}
+.transfer-source {
+  color: var(--muted);
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+}
 .terminal-panel {
   display: grid;
   grid-template-rows: minmax(0, 1fr) auto;
