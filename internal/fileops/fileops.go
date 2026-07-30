@@ -51,6 +51,59 @@ func (r Root) Rename(from, to string) error {
 }
 
 // Delete removes a local file, symlink, or directory tree within its root.
+// Copy copies a contained regular file or complete directory tree into this
+// root. Directory copies are assembled in a sibling staging directory and
+// atomically promoted only after every entry has been copied.
+func (r Root) Copy(from Root, sourceRelative, destinationRelative string) error {
+	source, err := from.target(sourceRelative)
+	if err != nil {
+		return err
+	}
+	info, err := os.Lstat(source)
+	if err != nil {
+		return err
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return errors.New("source is a symlink")
+	}
+	if info.Mode().IsRegular() {
+		return r.CopyRegular(from, sourceRelative, destinationRelative)
+	}
+	if !info.IsDir() {
+		return errors.New("source is not a regular file or directory")
+	}
+	destination, err := r.destination(destinationRelative)
+	if err != nil {
+		return err
+	}
+	if within(source, destination) {
+		return errors.New("cannot copy a directory into itself")
+	}
+	if _, err := os.Lstat(destination); err == nil {
+		return errors.New("destination already exists")
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	staging, err := os.MkdirTemp(filepath.Dir(destination), ".eta-copy-")
+	if err != nil {
+		return err
+	}
+	complete := false
+	defer func() {
+		if !complete {
+			_ = os.RemoveAll(staging)
+		}
+	}()
+	if err := copyTree(source, staging); err != nil {
+		return err
+	}
+	if err := os.Rename(staging, destination); err != nil {
+		return err
+	}
+	complete = true
+	return nil
+}
+
 // CopyRegular copies one contained regular file into this root. It refuses
 // overwrite, directories, and symlink destinations; callers can therefore use
 // it for ordinary Explorer copy/paste without special destination semantics.
@@ -105,6 +158,57 @@ func (r Root) CopyRegular(from Root, sourceRelative, destinationRelative string)
 	}
 	complete = true
 	return nil
+}
+
+func copyTree(source, destination string) error {
+	return filepath.WalkDir(source, func(path string, item os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		relative, err := filepath.Rel(source, path)
+		if err != nil {
+			return err
+		}
+		if relative == "." {
+			return nil
+		}
+		target := filepath.Join(destination, relative)
+		info, err := item.Info()
+		if err != nil {
+			return err
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return errors.New("directory contains a symlink")
+		}
+		if item.IsDir() {
+			return os.Mkdir(target, info.Mode().Perm())
+		}
+		if !info.Mode().IsRegular() {
+			return errors.New("directory contains a non-regular file")
+		}
+		input, err := os.Open(path)
+		if err != nil {
+			return err
+		}
+		output, err := os.OpenFile(target, os.O_WRONLY|os.O_CREATE|os.O_EXCL, info.Mode().Perm())
+		if err == nil {
+			_, err = io.Copy(output, input)
+			if err == nil {
+				err = output.Sync()
+			}
+			if closeErr := output.Close(); err == nil {
+				err = closeErr
+			}
+		}
+		closeErr := input.Close()
+		if err == nil {
+			err = closeErr
+		}
+		if err != nil {
+			return err
+		}
+		return os.Chtimes(target, info.ModTime(), info.ModTime())
+	})
 }
 
 func (r Root) Delete(relative string) error {

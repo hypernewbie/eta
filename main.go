@@ -977,7 +977,7 @@ func (s *server) handleCopy(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	if err := destination.CopyRegular(source, request.SourcePath, request.DestinationPath); err != nil {
+	if err := destination.Copy(source, request.SourcePath, request.DestinationPath); err != nil {
 		writeError(w, err)
 		return
 	}
