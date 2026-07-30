@@ -1,6 +1,7 @@
 {
   "name": "eta-web",
   "private": true,
+  "license": "MIT",
   "scripts": {
     "build:web": "tsc --project tsconfig.json",
     "check:web": "tsc --noEmit --project tsconfig.json",

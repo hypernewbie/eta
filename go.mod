@@ -7,4 +7,4 @@ require (
 	golang.org/x/sync v0.22.0
 )
 
-require github.com/creack/pty v1.1.24 // indirect
+require github.com/creack/pty v1.1.24
