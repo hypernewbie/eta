@@ -504,6 +504,29 @@ function scheduleDesktopSave() {
   stateSaveTimer = window.setTimeout(() => void saveDesktopState(), 400);
 }
 
+async function loadCopyTasks() {
+  try {
+    const jobs = await api("/api/transfer-jobs");
+    if (!Array.isArray(jobs)) return;
+    for (const job of jobs) {
+      if (!job.done || job.error) {
+        const id = `local:${job.id}`;
+        copyTasks.set(id, {
+          id,
+          name: job.name || "transfer",
+          completed: job.completed || 0,
+          total: job.total || 0,
+          error: job.error,
+          done: Boolean(job.done),
+        });
+      }
+    }
+    refreshTaskStrip();
+  } catch {
+    // Transfer history is supplemental to the desktop shell.
+  }
+}
+
 function refreshTaskStrip() {
   const taskStrip = $("#task-strip");
   const peerButtons = enrolledPeers.map(
@@ -1135,6 +1158,7 @@ async function boot() {
     } catch {
       enrolledPeers = [];
     }
+    await loadCopyTasks();
     const restored = await loadDesktopState();
     restoringDesktop = true;
     const explorers = restored.filter((window) => window.kind === "explorer");
@@ -1211,13 +1235,12 @@ async function monitorCopy(
     task.error = error;
     task.completed = task.total || task.completed;
     refreshTaskStrip();
-    window.setTimeout(
-      () => {
+    if (!error) {
+      window.setTimeout(() => {
         copyTasks.delete(taskID);
         refreshTaskStrip();
-      },
-      error ? 12_000 : 4_000,
-    );
+      }, 4_000);
+    }
   };
   const poll = async () => {
     try {

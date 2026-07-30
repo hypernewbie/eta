@@ -176,6 +176,10 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	s.transferJobs, err = transfer.NewPersistentJobs(filepath.Join(stageDir, "jobs.json"))
+	if err != nil {
+		log.Fatal(err)
+	}
 	cacheDir := *thumbnailCacheDir
 	if cacheDir == "" {
 		cacheDir, err = defaultThumbnailCacheDir()
@@ -281,6 +285,7 @@ func (s *server) routes() http.Handler {
 	mux.HandleFunc("POST /api/remote/transfers/send", s.handleRemoteTransferSend)
 	mux.HandleFunc("GET /api/remote/transfer-jobs", s.handleRemoteTransferJob)
 	mux.HandleFunc("POST /api/remote/delete", s.handleRemoteDelete)
+	mux.HandleFunc("GET /api/transfer-jobs", s.handleTransferJobs)
 	mux.HandleFunc("GET /api/transfer-jobs/{id}", s.handleTransferJob)
 	mux.HandleFunc("GET /api/transfers/{id}", s.handleTransferStatus)
 	mux.HandleFunc("PUT /api/transfers/{id}/chunks/{chunk}", s.handleTransferChunk)
@@ -491,7 +496,7 @@ func (s *server) handleTransferSend(w http.ResponseWriter, r *http.Request) {
 		}
 		totalChunks = len(manifest.Chunks)
 	}
-	job := s.transferJobs.Start(totalChunks)
+	job := s.transferJobs.StartNamed(totalChunks, transfer.SourceName(source))
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 		defer cancel()
@@ -646,6 +651,14 @@ func (s *server) handleRemoteTransferJob(w http.ResponseWriter, r *http.Request)
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(response.StatusCode)
 	_, _ = io.Copy(w, response.Body)
+}
+
+func (s *server) handleTransferJobs(w http.ResponseWriter, _ *http.Request) {
+	if s.transferJobs == nil {
+		writeError(w, errors.New("transfer service is unavailable"))
+		return
+	}
+	writeJSON(w, http.StatusOK, s.transferJobs.List())
 }
 
 func (s *server) handleTransferJob(w http.ResponseWriter, r *http.Request) {
