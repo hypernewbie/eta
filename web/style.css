@@ -4,10 +4,14 @@
   --bg-panel: #0d0d10;
   --bg-elevated: #141418;
   --bg-border: #1f1f26;
-  --accent: #7c6af7;
-  --accent-glow: rgba(124, 106, 247, 0.15);
-  --accent-dim: #5b4ec2;
-  --accent-bright: #9a8dfa;
+  /* Chrome stays deliberately achromatic; identity color belongs to the header only. */
+  --accent: #b4b2bd;
+  --accent-glow: rgba(180, 178, 189, 0.12);
+  --accent-dim: #777580;
+  --accent-bright: #e4e3e9;
+  --identity-accent: #7c6af7;
+  --identity-glow: rgba(124, 106, 247, 0.15);
+  --identity-bright: #9a8dfa;
   --accent-edge: color-mix(in srgb, var(--accent) 35%, transparent);
   --accent-soft: color-mix(in srgb, var(--accent) 22%, transparent);
   --accent-wash: color-mix(in srgb, var(--accent) 10%, transparent);
@@ -100,11 +104,11 @@ button {
   letter-spacing: 0.04em;
 }
 .sigil {
-  color: var(--accent);
+  color: var(--identity-accent);
   font-family: var(--font-mono);
   font-weight: 600;
   font-size: 24px;
-  text-shadow: 0 0 10px var(--accent-glow);
+  text-shadow: 0 0 10px var(--identity-glow);
   line-height: 1;
 }
 .wordmark {
@@ -117,15 +121,15 @@ button {
   display: flex;
   align-items: baseline;
   gap: 5px;
-  color: var(--text-muted);
+  color: var(--identity-accent);
   font: 10px var(--font-mono);
   letter-spacing: 0.08em;
   text-transform: uppercase;
 }
 .host-mark {
-  color: var(--accent);
+  color: var(--identity-accent);
   font-size: 15px;
-  text-shadow: 0 0 8px var(--accent-soft);
+  text-shadow: 0 0 8px var(--identity-glow);
 }
 .header-status {
   margin-left: auto;
@@ -823,9 +827,7 @@ iconify-icon.entry-icon {
   height: 40px;
   align-items: stretch;
   border-top: 1px solid var(--bg-border);
-  background:
-    linear-gradient(90deg, var(--accent-trace), transparent 26%),
-    rgba(10, 10, 13, 0.92);
+  background: rgba(10, 10, 13, 0.94);
   box-shadow:
     0 -10px 28px rgba(0, 0, 0, 0.32),
     inset 0 1px 0 rgba(255, 255, 255, 0.04);
@@ -928,12 +930,16 @@ iconify-icon.entry-icon {
 .terminal-xterm .xterm {
   height: 100%;
 }
+/* Peer identity is the one deliberate exception to neutral desktop chrome. */
 .peer-window .wb-header::before {
   background: var(--window-accent);
   box-shadow: 0 0 10px var(--window-accent);
 }
 .peer-window .wb-title,
 .peer-launcher .peer-glyph {
+  color: var(--window-accent, var(--accent-bright));
+}
+.peer-launcher::part(base) {
   color: var(--window-accent, var(--accent-bright));
 }
 .winbox.focus {

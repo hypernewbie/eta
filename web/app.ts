@@ -375,11 +375,15 @@ const codeLanguages: Record<string, [string, string]> = {
 
 function setTheme(name: string, persist = true) {
   const theme = COLORS[name] || COLORS.purple;
-  document.documentElement.style.setProperty("--accent", theme.accent);
-  document.documentElement.style.setProperty("--accent-glow", theme.accentGlow);
-  document.documentElement.style.setProperty("--accent-dim", theme.accentDim);
+  // Host color identifies this machine only. Desktop chrome stays neutral so
+  // host identity does not turn into an application-wide highlight theme.
+  document.documentElement.style.setProperty("--identity-accent", theme.accent);
   document.documentElement.style.setProperty(
-    "--accent-bright",
+    "--identity-glow",
+    theme.accentGlow,
+  );
+  document.documentElement.style.setProperty(
+    "--identity-bright",
     theme.accentBright,
   );
   if (persist) localStorage.setItem("eta_theme_color", name);
