@@ -558,12 +558,17 @@ async function loadCopyTasks() {
   }
 }
 
+function refreshEtaMenu() {
+  const local = `<button type="button" class="eta-location eta-location-local" data-location="local"><span class="eta-location-glyph">${escapeHTML(localHost.glyph)}</span><span>${escapeHTML(localHost.hostname.toUpperCase())}</span></button>`;
+  const peers = enrolledPeers.map(
+    (peer) =>
+      `<button type="button" class="eta-location" style="--pc-accent:${escapeHTML(COLORS[peer.accent]?.accent || "#7c6af7")}" data-location="${escapeHTML(peer.url)}"><span class="eta-location-glyph">${escapeHTML(peer.glyph)}</span><span>${escapeHTML(peer.name.toUpperCase())}</span></button>`,
+  );
+  $("#eta-menu-locations").innerHTML = [local, ...peers].join("");
+}
+
 function refreshTaskStrip() {
   const taskStrip = $("#task-strip");
-  const peerButtons = enrolledPeers.map(
-    (peer) =>
-      `<sl-button size="small" class="task-button peer-launcher" style="--window-accent:${escapeHTML(COLORS[peer.accent]?.accent || "#7c6af7")}" data-peer="${escapeHTML(peer.url)}"><span class="peer-glyph">${escapeHTML(peer.glyph)}</span>${escapeHTML(peer.name)}</sl-button>`,
-  );
   const copies = [...copyTasks.values()].map((task) => {
     const progress = task.done
       ? task.error
@@ -576,7 +581,8 @@ function refreshTaskStrip() {
     ([key, item]) =>
       `<sl-button size="small" class="task-button" data-window="${escapeHTML(key)}"><i data-lucide="${key.startsWith("explorer:") ? "folder-open" : "file-text"}"></i>${escapeHTML(item.title)}</sl-button>`,
   );
-  taskStrip.innerHTML = [...peerButtons, ...copies, ...windows].join("");
+  taskStrip.innerHTML = [...copies, ...windows].join("");
+  refreshEtaMenu();
   iconify();
 }
 function focusDesktopWindow(key: string) {
@@ -1486,7 +1492,30 @@ document.addEventListener("pointerdown", (event) => {
   if (!(event.target as HTMLElement).closest("#file-context-menu"))
     $("#file-context-menu").hidden = true;
 });
-$("#eta-launcher").addEventListener("click", () => void openExplorerWindow());
+$("#eta-launcher").addEventListener("click", (event) => {
+  event.stopPropagation();
+  const menu = $("#eta-menu");
+  menu.hidden = !menu.hidden;
+});
+$("#eta-menu").addEventListener("click", (event) => {
+  const location = (event.target as HTMLElement).closest(
+    "[data-location]",
+  ) as HTMLElement | null;
+  if (!location) return;
+  $("#eta-menu").hidden = true;
+  if (location.dataset.location === "local") {
+    void openExplorerWindow();
+    return;
+  }
+  const peer = enrolledPeers.find(
+    (candidate) => candidate.url === location.dataset.location,
+  );
+  if (peer) void openExplorerWindow(undefined, peer);
+});
+document.addEventListener("pointerdown", (event) => {
+  if (!(event.target as HTMLElement).closest("#eta-menu, #eta-launcher"))
+    $("#eta-menu").hidden = true;
+});
 $("#task-strip").addEventListener("click", (event) => {
   const button = (event.target as HTMLElement).closest(
     "[data-window]",
@@ -1495,13 +1524,6 @@ $("#task-strip").addEventListener("click", (event) => {
     focusDesktopWindow(button.dataset.window || "");
     return;
   }
-  const peerButton = (event.target as HTMLElement).closest(
-    "[data-peer]",
-  ) as HTMLElement | null;
-  const peer = enrolledPeers.find(
-    (candidate) => candidate.url === peerButton?.dataset.peer,
-  );
-  if (peer) void openExplorerWindow(undefined, peer);
 });
 $("#download-button").addEventListener("click", () => {
   if (dialogView?.state.selected)

@@ -9,6 +9,7 @@ test("launcher opens independently navigable Explorer windows", async ({
   const explorers = page.locator(".winbox.eta-window");
   await expect(explorers).toHaveCount(1);
   await page.locator("#eta-launcher").click();
+  await page.locator('[data-location="local"]').click();
   await expect(explorers).toHaveCount(2);
   await expect(page.locator("#task-strip")).toContainText("Explorer 2");
 

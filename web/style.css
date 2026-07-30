@@ -842,12 +842,72 @@ iconify-icon.entry-icon {
   border: 0;
   border-right: 1px solid var(--bg-border);
   background: transparent;
-  color: var(--accent-bright);
+  color: var(--text-muted);
   font: 600 22px var(--font-mono);
-  text-shadow: 0 0 12px var(--accent-soft);
+  transition:
+    color 0.16s ease,
+    background-color 0.16s ease;
 }
-.eta-launcher:hover {
-  background: var(--accent-wash);
+.eta-launcher:hover,
+.eta-launcher:focus-visible {
+  background: var(--identity-glow);
+  color: var(--identity-accent);
+  outline: 0;
+}
+.eta-menu {
+  position: fixed;
+  z-index: 10001;
+  bottom: 46px;
+  left: 6px;
+  width: min(270px, calc(100vw - 12px));
+  overflow: hidden;
+  border: 1px solid var(--bg-border);
+  border-radius: 6px;
+  background: rgba(14, 14, 17, 0.97);
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.5);
+  backdrop-filter: blur(18px) saturate(130%);
+}
+.eta-menu[hidden] {
+  display: none;
+}
+.eta-menu-label {
+  padding: 10px 12px 6px;
+  color: var(--text-dim);
+  font: 10px var(--font-mono);
+  letter-spacing: 0.12em;
+}
+.eta-location {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 11px;
+  border: 0;
+  border-top: 1px solid rgba(255, 255, 255, 0.035);
+  background: transparent;
+  color: var(--pc-accent, var(--text-primary));
+  padding: 11px 13px;
+  font: 600 12px var(--font-mono);
+  letter-spacing: 0.08em;
+  text-align: left;
+}
+.eta-location-local {
+  --pc-accent: var(--identity-accent);
+}
+.eta-location:hover,
+.eta-location:focus-visible {
+  background: color-mix(
+    in srgb,
+    var(--pc-accent, var(--text-primary)) 12%,
+    transparent
+  );
+  outline: 0;
+}
+.eta-location-glyph {
+  width: 21px;
+  color: var(--pc-accent, var(--text-primary));
+  font-size: 20px;
+  line-height: 1;
+  text-align: center;
 }
 .task-strip {
   display: flex;

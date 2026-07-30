@@ -66,7 +66,8 @@ test("enrolled peer opens as a source-aware remote Explorer", async ({
     expect(enrolled.ok()).toBeTruthy();
 
     await page.goto("/");
-    const launcher = page.locator(".peer-launcher");
+    await page.locator("#eta-launcher").click();
+    const launcher = page.locator(`[data-location="${peerURL}"]`);
     await expect(launcher).toHaveCount(1);
     await launcher.click();
 
