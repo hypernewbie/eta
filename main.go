@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"embed"
@@ -279,6 +280,7 @@ func (s *server) routes() http.Handler {
 	mux.HandleFunc("POST /api/transfers/send", s.handleTransferSend)
 	mux.HandleFunc("POST /api/remote/transfers/send", s.handleRemoteTransferSend)
 	mux.HandleFunc("GET /api/remote/transfer-jobs", s.handleRemoteTransferJob)
+	mux.HandleFunc("POST /api/remote/delete", s.handleRemoteDelete)
 	mux.HandleFunc("GET /api/transfer-jobs/{id}", s.handleTransferJob)
 	mux.HandleFunc("GET /api/transfers/{id}", s.handleTransferStatus)
 	mux.HandleFunc("PUT /api/transfers/{id}/chunks/{chunk}", s.handleTransferChunk)
@@ -559,6 +561,42 @@ func (s *server) handleRemoteTransferSend(w http.ResponseWriter, r *http.Request
 		return
 	}
 	writeJSON(w, http.StatusAccepted, map[string]string{"peer": source.URL, "id": job.ID})
+}
+
+func (s *server) handleRemoteDelete(w http.ResponseWriter, r *http.Request) {
+	if s.peers == nil {
+		writeError(w, errors.New("peer inventory is unavailable"))
+		return
+	}
+	peer, found, err := s.peers.Find(r.URL.Query().Get("peer"))
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	if !found {
+		writeError(w, errors.New("unknown peer"))
+		return
+	}
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 64<<10))
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	request, err := http.NewRequestWithContext(r.Context(), http.MethodPost, strings.TrimSuffix(peer.URL, "/")+"/api/delete", bytes.NewReader(body))
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	request.Header.Set("Content-Type", "application/json")
+	response, err := (&http.Client{Timeout: 10 * time.Second}).Do(request)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	defer response.Body.Close()
+	w.Header().Set("Content-Type", response.Header.Get("Content-Type"))
+	w.WriteHeader(response.StatusCode)
+	_, _ = io.Copy(w, response.Body)
 }
 
 func (s *server) handleRemoteTransferJob(w http.ResponseWriter, r *http.Request) {

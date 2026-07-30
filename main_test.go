@@ -31,6 +31,36 @@ func TestMediaTypes(t *testing.T) {
 	}
 }
 
+func TestCoordinatorDeletesRemoteSourceAfterMove(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "source.bin"), []byte("eta"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	source, err := newServer([]string{root})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sourceHTTP := httptest.NewServer(source.routes())
+	defer sourceHTTP.Close()
+	coordinator, err := newServer([]string{t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	coordinator.peers = peers.New(filepath.Join(t.TempDir(), "peers.json"))
+	if err := coordinator.peers.Add(peers.Peer{URL: sourceHTTP.URL}); err != nil {
+		t.Fatal(err)
+	}
+	response := httptest.NewRecorder()
+	request := httptest.NewRequest("POST", "/api/remote/delete?peer="+url.QueryEscape(sourceHTTP.URL), strings.NewReader(`{"root":0,"path":"source.bin"}`))
+	coordinator.routes().ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("delete=%d %s", response.Code, response.Body.String())
+	}
+	if _, err := os.Stat(filepath.Join(root, "source.bin")); !os.IsNotExist(err) {
+		t.Fatalf("source still exists: %v", err)
+	}
+}
+
 func TestCoordinatorAsksPeerToTransferDirectly(t *testing.T) {
 	sourceRoot, destinationRoot := t.TempDir(), t.TempDir()
 	source, err := newServer([]string{sourceRoot})

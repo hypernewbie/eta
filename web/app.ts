@@ -232,6 +232,7 @@ let contextEntry: ExplorerEntry | null = null;
 // Explorer clipboard intentionally models locations, not PCs. The transfer
 // transport is selected only when a paste crosses to an enrolled peer.
 let explorerClipboard: ExplorerEntry | null = null;
+let explorerClipboardOperation: "copy" | "cut" = "copy";
 let explorerSequence = 0;
 let localHost: HostIdentity = {
   id: "local",
@@ -909,6 +910,8 @@ function bindExplorer(view: ExplorerView) {
     ).hidden = !htmlExtensions.has(extension(contextEntry.entry.name));
     (menu.querySelector('[data-file-action="copy"]') as HTMLElement).hidden =
       contextEntry.entry.kind !== "file";
+    (menu.querySelector('[data-file-action="cut"]') as HTMLElement).hidden =
+      contextEntry.entry.kind !== "file";
     (menu.querySelector('[data-file-action="paste"]') as HTMLElement).hidden =
       contextEntry.entry.kind !== "directory" || !explorerClipboard || explorerClipboard.entry.kind !== "file";
     (menu.querySelector('[data-file-action="terminal"]') as HTMLElement).hidden = !!view.state.peer;
@@ -1014,6 +1017,17 @@ async function boot() {
   iconify();
 }
 
+async function completeCut(source: ExplorerEntry) {
+  if (explorerClipboardOperation !== "cut") return;
+  if (source.view.state.peer) {
+    await api(`/api/remote/delete?${new URLSearchParams({ peer: source.view.state.peer.url })}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ root: source.view.state.root, path: source.entry.path }) });
+  } else {
+    await api("/api/delete", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ root: source.view.state.root, path: source.entry.path }) });
+  }
+  explorerClipboard = null;
+  await navigate(source.view, source.view.state.path);
+}
+
 async function monitorCopy(jobID: string, sourcePeer: Peer | undefined, source: ExplorerEntry, destination: ExplorerEntry) {
   const poll = async () => {
     const endpoint = sourcePeer
@@ -1022,7 +1036,8 @@ async function monitorCopy(jobID: string, sourcePeer: Peer | undefined, source: 
     const status = await api(endpoint);
     if (!status.done) { window.setTimeout(() => void poll(), 300); return; }
     if (status.error) { showToast(`Copy failed: ${status.error}`); return; }
-    showToast(`Copied ${source.entry.name}`, "success");
+    await completeCut(source);
+    showToast(`${explorerClipboardOperation === "cut" ? "Moved" : "Copied"} ${source.entry.name}`, "success");
     await navigate(destination.view, destination.view.state.path);
   };
   void poll();
@@ -1038,7 +1053,8 @@ async function pasteIntoFolder(destination: ExplorerEntry) {
   const destinationPeer = destination.view.state.peer;
   if (!sourcePeer && !destinationPeer) {
     await api("/api/copy", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sourceRoot: source.view.state.root, sourcePath: source.entry.path, destinationRoot: destination.view.state.root, destinationPath }) });
-    showToast(`Copied ${source.entry.name}`, "success");
+    await completeCut(source);
+    showToast(`${explorerClipboardOperation === "cut" ? "Moved" : "Copied"} ${source.entry.name}`, "success");
     await navigate(destination.view, destination.view.state.path);
     return;
   }
@@ -1066,9 +1082,10 @@ $("#file-context-menu").addEventListener("click", async (event) => {
       await openTerminal(target.view, target.entry);
       return;
     }
-    if (action.dataset.fileAction === "copy") {
+    if (action.dataset.fileAction === "copy" || action.dataset.fileAction === "cut") {
       explorerClipboard = target;
-      showToast(`Copied ${target.entry.name} to clipboard`);
+      explorerClipboardOperation = action.dataset.fileAction;
+      showToast(`${explorerClipboardOperation === "cut" ? "Cut" : "Copied"} ${target.entry.name} to clipboard`);
       return;
     }
     if (action.dataset.fileAction === "paste") {
