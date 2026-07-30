@@ -4,6 +4,7 @@ package fileops
 import (
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -50,6 +51,62 @@ func (r Root) Rename(from, to string) error {
 }
 
 // Delete removes a local file, symlink, or directory tree within its root.
+// CopyRegular copies one contained regular file into this root. It refuses
+// overwrite, directories, and symlink destinations; callers can therefore use
+// it for ordinary Explorer copy/paste without special destination semantics.
+func (r Root) CopyRegular(from Root, sourceRelative, destinationRelative string) error {
+	source, err := from.target(sourceRelative)
+	if err != nil {
+		return err
+	}
+	info, err := os.Stat(source)
+	if err != nil {
+		return err
+	}
+	if !info.Mode().IsRegular() {
+		return errors.New("source is not a regular file")
+	}
+	destination, err := r.destination(destinationRelative)
+	if err != nil {
+		return err
+	}
+	if _, err := os.Lstat(destination); err == nil {
+		return errors.New("destination already exists")
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	input, err := os.Open(source)
+	if err != nil {
+		return err
+	}
+	defer input.Close()
+	output, err := os.OpenFile(destination, os.O_WRONLY|os.O_CREATE|os.O_EXCL, info.Mode().Perm())
+	if err != nil {
+		return err
+	}
+	name := output.Name()
+	complete := false
+	defer func() {
+		if !complete {
+			_ = os.Remove(name)
+		}
+	}()
+	if _, err = io.Copy(output, input); err == nil {
+		err = output.Sync()
+	}
+	if closeErr := output.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		return err
+	}
+	if err = os.Chtimes(destination, info.ModTime(), info.ModTime()); err != nil {
+		return err
+	}
+	complete = true
+	return nil
+}
+
 func (r Root) Delete(relative string) error {
 	target, err := r.target(relative)
 	if err != nil {

@@ -285,6 +285,7 @@ func (s *server) routes() http.Handler {
 	mux.HandleFunc("GET /api/remote/thumbnail", s.handleRemoteThumbnail)
 	mux.HandleFunc("POST /api/peers", s.handlePeerAdd)
 	mux.HandleFunc("DELETE /api/peers", s.handlePeerDelete)
+	mux.HandleFunc("POST /api/copy", s.handleCopy)
 	mux.HandleFunc("POST /api/rename", s.handleRename)
 	mux.HandleFunc("POST /api/delete", s.handleDelete)
 	mux.HandleFunc("GET /api/list", s.handleList)
@@ -805,6 +806,38 @@ func (s *server) handlePeerDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *server) handleCopy(w http.ResponseWriter, r *http.Request) {
+	var request struct {
+		SourceRoot      int    `json:"sourceRoot"`
+		SourcePath      string `json:"sourcePath"`
+		DestinationRoot int    `json:"destinationRoot"`
+		DestinationPath string `json:"destinationPath"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&request); err != nil {
+		writeError(w, err)
+		return
+	}
+	if request.SourceRoot < 0 || request.SourceRoot >= len(s.roots) || request.DestinationRoot < 0 || request.DestinationRoot >= len(s.roots) {
+		writeError(w, errors.New("invalid root"))
+		return
+	}
+	source, err := fileops.New(s.roots[request.SourceRoot].Path)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	destination, err := fileops.New(s.roots[request.DestinationRoot].Path)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	if err := destination.CopyRegular(source, request.SourcePath, request.DestinationPath); err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, map[string]string{"status": "ok"})
 }
 
 func (s *server) handleRename(w http.ResponseWriter, r *http.Request) {

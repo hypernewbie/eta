@@ -6,6 +6,31 @@ import (
 	"testing"
 )
 
+func TestCopyRegularAcrossRoots(t *testing.T) {
+	sourcePath, destinationPath := t.TempDir(), t.TempDir()
+	if err := os.WriteFile(filepath.Join(sourcePath, "source.txt"), []byte("eta"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	source, err := New(sourcePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	destination, err := New(destinationPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := destination.CopyRegular(source, "source.txt", "copied.txt"); err != nil {
+		t.Fatal(err)
+	}
+	body, err := os.ReadFile(filepath.Join(destinationPath, "copied.txt"))
+	if err != nil || string(body) != "eta" {
+		t.Fatalf("body=%q err=%v", body, err)
+	}
+	if err := destination.CopyRegular(source, "source.txt", "copied.txt"); err == nil {
+		t.Fatal("overwrite allowed")
+	}
+}
+
 func TestRenameDeleteAndContainment(t *testing.T) {
 	rootPath, outside := t.TempDir(), t.TempDir()
 	must := func(err error) {

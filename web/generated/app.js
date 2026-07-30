@@ -135,7 +135,9 @@ const COLORS = {
 };
 let dialogView = null;
 let contextEntry = null;
-let transferTarget = null;
+// Explorer clipboard intentionally models locations, not PCs. The transfer
+// transport is selected only when a paste crosses to an enrolled peer.
+let explorerClipboard = null;
 let explorerSequence = 0;
 let localHost = {
     id: "local",
@@ -791,8 +793,10 @@ function bindExplorer(view) {
         };
         const menu = $("#file-context-menu");
         menu.querySelector('[data-file-action="trusted-html"]').hidden = !htmlExtensions.has(extension(contextEntry.entry.name));
-        menu.querySelector('[data-file-action="send-peer"]').hidden =
-            contextEntry.entry.kind !== "file" || !!view.state.peer || enrolledPeers.length === 0;
+        menu.querySelector('[data-file-action="copy"]').hidden =
+            contextEntry.entry.kind !== "file" || !!view.state.peer;
+        menu.querySelector('[data-file-action="paste"]').hidden =
+            contextEntry.entry.kind !== "directory" || !explorerClipboard || !!explorerClipboard.view.state.peer;
         menu.querySelector('[data-file-action="terminal"]').hidden = !!view.state.peer;
         menu.style.left = `${event.clientX}px`;
         menu.style.top = `${event.clientY}px`;
@@ -894,48 +898,30 @@ async function boot() {
     }
     iconify();
 }
-async function openTransferDialog(target) {
-    transferTarget = target;
-    $("#transfer-source").textContent = target.entry.name;
-    const peerSelect = $("#transfer-peer");
-    peerSelect.innerHTML = enrolledPeers.map((peer) => `<sl-option value="${escapeHTML(peer.url)}">${escapeHTML(`${peer.glyph} ${peer.name}`)}</sl-option>`).join("");
-    peerSelect.value = enrolledPeers[0]?.url || "";
-    $("#transfer-path").value = target.entry.name;
-    await loadTransferRoots();
-    $("#transfer-dialog").show();
-}
-async function loadTransferRoots() {
-    const peerURL = $("#transfer-peer").value;
-    const rootSelect = $("#transfer-root");
-    rootSelect.innerHTML = "";
-    if (!peerURL)
+async function pasteIntoFolder(destination) {
+    const source = explorerClipboard;
+    if (!source || source.entry.kind !== "file" || source.view.state.peer)
         return;
-    const roots = await api(`/api/remote/roots?${new URLSearchParams({ peer: peerURL })}`);
-    rootSelect.innerHTML = roots.map((root) => `<sl-option value="${root.id}">${escapeHTML(root.name)}</sl-option>`).join("");
-    rootSelect.value = String(roots[0]?.id ?? "");
-}
-async function startTransfer() {
-    const target = transferTarget;
-    if (!target)
+    const destinationPath = destination.entry.path
+        ? `${destination.entry.path}/${source.entry.name}`
+        : source.entry.name;
+    if (!destination.view.state.peer) {
+        await api("/api/copy", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sourceRoot: source.view.state.root, sourcePath: source.entry.path, destinationRoot: destination.view.state.root, destinationPath }) });
+        showToast(`Copied ${source.entry.name}`, "success");
+        await navigate(destination.view, destination.view.state.path);
         return;
-    const peerURL = $("#transfer-peer").value;
-    const destinationRoot = Number($("#transfer-root").value);
-    const destinationPath = $("#transfer-path").value.trim();
-    const peer = enrolledPeers.find((candidate) => candidate.url === peerURL);
-    if (!peer || !Number.isInteger(destinationRoot) || !destinationPath)
-        return;
-    $("#transfer-dialog").hide();
-    const job = await api("/api/transfers/send", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ peer: peer.url, sourceRoot: target.view.state.root, sourcePath: target.entry.path, destinationRoot, destinationPath }) });
-    showToast(`Sending ${target.entry.name} to ${peer.name}…`);
+    }
+    const peer = destination.view.state.peer;
+    const job = await api("/api/transfers/send", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ peer: peer.url, sourceRoot: source.view.state.root, sourcePath: source.entry.path, destinationRoot: destination.view.state.root, destinationPath }) });
+    showToast(`Copying ${source.entry.name}…`);
     const poll = async () => { const status = await api(`/api/transfer-jobs/${encodeURIComponent(job.id)}`); if (!status.done) {
         window.setTimeout(() => void poll(), 300);
         return;
     } ; if (status.error) {
-        showToast(`Transfer failed: ${status.error}`);
+        showToast(`Copy failed: ${status.error}`);
         return;
-    } ; showToast(`Sent ${target.entry.name} to ${peer.name}`, "success"); };
+    } ; showToast(`Copied ${source.entry.name}`, "success"); await navigate(destination.view, destination.view.state.path); };
     void poll();
-    transferTarget = null;
 }
 $("#file-context-menu").addEventListener("click", async (event) => {
     const action = event.target.closest("[data-file-action]");
@@ -949,8 +935,13 @@ $("#file-context-menu").addEventListener("click", async (event) => {
             await openTerminal(target.view, target.entry);
             return;
         }
-        if (action.dataset.fileAction === "send-peer") {
-            await openTransferDialog(target);
+        if (action.dataset.fileAction === "copy") {
+            explorerClipboard = target;
+            showToast(`Copied ${target.entry.name} to clipboard`);
+            return;
+        }
+        if (action.dataset.fileAction === "paste") {
+            await pasteIntoFolder(target);
             return;
         }
         if (action.dataset.fileAction === "trusted-html") {
@@ -989,9 +980,6 @@ $("#file-context-menu").addEventListener("click", async (event) => {
         showToast(error.message);
     }
 });
-$("#transfer-peer").addEventListener("sl-change", () => void loadTransferRoots());
-$("#transfer-cancel").addEventListener("click", () => { transferTarget = null; $("#transfer-dialog").hide(); });
-$("#transfer-start").addEventListener("click", () => void startTransfer());
 document.addEventListener("pointerdown", (event) => {
     if (!event.target.closest("#file-context-menu"))
         $("#file-context-menu").hidden = true;

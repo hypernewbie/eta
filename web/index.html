@@ -144,8 +144,11 @@
       <button type="button" data-file-action="terminal">
         <i data-lucide="terminal-square"></i> Open Terminal Here
       </button>
-      <button type="button" data-file-action="send-peer">
-        <i data-lucide="send"></i> Send to PC
+      <button type="button" data-file-action="copy">
+        <i data-lucide="copy"></i> Copy
+      </button>
+      <button type="button" data-file-action="paste">
+        <i data-lucide="clipboard-paste"></i> Paste into Folder
       </button>
       <button type="button" data-file-action="rename">
         <i data-lucide="pencil"></i> Rename
@@ -164,16 +167,6 @@
         ><sl-button id="close-dialog">Close</sl-button>
       </div></sl-dialog
     >
-    <sl-dialog id="transfer-dialog" label="Send to PC" class="transfer-dialog">
-      <p id="transfer-source" class="transfer-source"></p>
-      <sl-select id="transfer-peer" label="Destination PC"></sl-select>
-      <sl-select id="transfer-root" label="Destination root"></sl-select>
-      <sl-input id="transfer-path" label="Destination file name"></sl-input>
-      <div slot="footer">
-        <sl-button id="transfer-cancel">Cancel</sl-button>
-        <sl-button id="transfer-start" variant="primary"><i data-lucide="send"></i> Send</sl-button>
-      </div>
-    </sl-dialog>
     <sl-dialog
       id="theme-dialog"
       label="Choose a highlight color"
