@@ -876,6 +876,12 @@ iconify-icon.entry-icon {
   background: var(--accent-wash);
   color: var(--accent-bright);
 }
+.copy-task::part(base) {
+  color: var(--text);
+}
+.copy-task-error::part(base) {
+  color: var(--danger, #ef6b73);
+}
 .task-button i {
   width: 13px;
   flex: 0 0 auto;
@@ -919,7 +925,10 @@ iconify-icon.entry-icon {
   overflow: auto;
   padding: 16px;
   color: #d4d7e5;
-  font: 13px/1.45 "JetBrains Mono", ui-monospace, monospace;
+  font:
+    13px/1.45 "JetBrains Mono",
+    ui-monospace,
+    monospace;
   white-space: pre-wrap;
 }
 .terminal-input {
@@ -931,7 +940,10 @@ iconify-icon.entry-icon {
   background: #10121a;
   color: #f3f4fa;
   padding: 12px 16px;
-  font: 13px "JetBrains Mono", ui-monospace, monospace;
+  font:
+    13px "JetBrains Mono",
+    ui-monospace,
+    monospace;
 }
 .peer-window .wb-header::before {
   background: var(--window-accent);

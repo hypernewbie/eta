@@ -49,7 +49,13 @@ type Theme = {
   accentBright: string;
 };
 type Root = { id: number; name: string };
-type Peer = { url: string; name: string; id: string; accent: string; glyph: string };
+type Peer = {
+  url: string;
+  name: string;
+  id: string;
+  accent: string;
+  glyph: string;
+};
 type Entry = {
   name: string;
   path: string;
@@ -381,19 +387,31 @@ function escapeHTML(value) {
   node.textContent = value;
   return node.innerHTML;
 }
-function sourceURL(view: ExplorerView, endpoint: string, params: Record<string, string>) {
+function sourceURL(
+  view: ExplorerView,
+  endpoint: string,
+  params: Record<string, string>,
+) {
   const query = new URLSearchParams(params);
   if (view.state.peer) query.set("peer", view.state.peer.url);
   return `${view.state.peer ? "/api/remote" : "/api"}/${endpoint}?${query}`;
 }
 function fileURL(view: ExplorerView, path: string, download = false) {
-  return sourceURL(view, "file", { root: String(view.state.root), path, ...(download ? { download: "1" } : {}) });
+  return sourceURL(view, "file", {
+    root: String(view.state.root),
+    path,
+    ...(download ? { download: "1" } : {}),
+  });
 }
 function previewURL(view: ExplorerView, path: string) {
   return sourceURL(view, "preview", { root: String(view.state.root), path });
 }
 function thumbnailURL(view: ExplorerView, path: string, edge = 320) {
-  return sourceURL(view, "thumbnail", { root: String(view.state.root), path, size: String(edge) });
+  return sourceURL(view, "thumbnail", {
+    root: String(view.state.root),
+    path,
+    size: String(edge),
+  });
 }
 function extension(name) {
   return name.includes(".")
@@ -441,6 +459,15 @@ type DesktopWindow = {
   >;
 };
 const desktopWindows = new Map<string, DesktopWindow>();
+type CopyTask = {
+  id: string;
+  name: string;
+  completed: number;
+  total: number;
+  error?: string;
+  done: boolean;
+};
+const copyTasks = new Map<string, CopyTask>();
 let enrolledPeers: Peer[] = [];
 const explorerViews = new Map<string, ExplorerView>();
 let restoringDesktop = false;
@@ -479,9 +506,23 @@ function scheduleDesktopSave() {
 
 function refreshTaskStrip() {
   const taskStrip = $("#task-strip");
-  const peerButtons = enrolledPeers.map((peer) => `<sl-button size="small" class="task-button peer-launcher" style="--window-accent:${escapeHTML(COLORS[peer.accent]?.accent || "#7c6af7")}" data-peer="${escapeHTML(peer.url)}"><span class="peer-glyph">${escapeHTML(peer.glyph)}</span>${escapeHTML(peer.name)}</sl-button>`);
-  const windows = [...desktopWindows.entries()].map(([key, item]) => `<sl-button size="small" class="task-button" data-window="${escapeHTML(key)}"><i data-lucide="${key.startsWith("explorer:") ? "folder-open" : "file-text"}"></i>${escapeHTML(item.title)}</sl-button>`);
-  taskStrip.innerHTML = [...peerButtons, ...windows].join("");
+  const peerButtons = enrolledPeers.map(
+    (peer) =>
+      `<sl-button size="small" class="task-button peer-launcher" style="--window-accent:${escapeHTML(COLORS[peer.accent]?.accent || "#7c6af7")}" data-peer="${escapeHTML(peer.url)}"><span class="peer-glyph">${escapeHTML(peer.glyph)}</span>${escapeHTML(peer.name)}</sl-button>`,
+  );
+  const copies = [...copyTasks.values()].map((task) => {
+    const progress = task.done
+      ? task.error
+        ? "failed"
+        : "complete"
+      : `${task.completed}/${task.total}`;
+    return `<sl-button size="small" class="task-button copy-task ${task.error ? "copy-task-error" : ""}" disabled><i data-lucide="${task.error ? "circle-alert" : task.done ? "check" : "copy"}"></i>Copy ${escapeHTML(task.name)} — ${progress}</sl-button>`;
+  });
+  const windows = [...desktopWindows.entries()].map(
+    ([key, item]) =>
+      `<sl-button size="small" class="task-button" data-window="${escapeHTML(key)}"><i data-lucide="${key.startsWith("explorer:") ? "folder-open" : "file-text"}"></i>${escapeHTML(item.title)}</sl-button>`,
+  );
+  taskStrip.innerHTML = [...peerButtons, ...copies, ...windows].join("");
   iconify();
 }
 function focusDesktopWindow(key: string) {
@@ -502,15 +543,24 @@ function createExplorerPanel() {
   $("#explorer-backstore").append(panel);
   return panel;
 }
-async function openExplorerWindow(restored?: PersistedWindow, peer: Peer | null = null) {
+async function openExplorerWindow(
+  restored?: PersistedWindow,
+  peer: Peer | null = null,
+) {
   if (!window.WinBox || window.innerWidth < 700) return;
   document.body.classList.add("windowed");
   const number = ++explorerSequence;
   const key = `explorer:${number}`;
   const explorerName = number === 1 ? "Explorer" : `Explorer ${number}`;
-  const title = peer ? `${peer.glyph} ${explorerName}` : hostWindowTitle(explorerName);
+  const title = peer
+    ? `${peer.glyph} ${explorerName}`
+    : hostWindowTitle(explorerName);
   const panel = createExplorerPanel();
-  if (peer) panel.style.setProperty("--window-accent", COLORS[peer.accent]?.accent || "#7c6af7");
+  if (peer)
+    panel.style.setProperty(
+      "--window-accent",
+      COLORS[peer.accent]?.accent || "#7c6af7",
+    );
   const view = createExplorerView(key, panel);
   view.state.peer = peer;
   const windowChanged = () => {
@@ -643,7 +693,9 @@ async function navigate(view: ExplorerView, path = "") {
   renderBreadcrumbs(view);
   iconify();
   try {
-    const result = await api(sourceURL(view, "list", { root: String(view.state.root), path }));
+    const result = await api(
+      sourceURL(view, "list", { root: String(view.state.root), path }),
+    );
     if (result.entry && result.entry.kind !== "directory") {
       await preview(view, result.entry);
       return;
@@ -732,7 +784,12 @@ async function openTerminal(view: ExplorerView, entry: Entry) {
   const created = await api("/api/terminals", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ root: view.state.root, path: entry.path, columns: 120, rows: 32 }),
+    body: JSON.stringify({
+      root: view.state.root,
+      path: entry.path,
+      columns: 120,
+      rows: 32,
+    }),
   });
   const panel = document.createElement("section");
   panel.className = "terminal-panel";
@@ -747,20 +804,56 @@ async function openTerminal(view: ExplorerView, entry: Entry) {
   const refresh = async () => {
     if (stopped) return;
     try {
-      const result = await api(`/api/terminals/${encodeURIComponent(created.id)}?offset=${offset}`);
-      if (result.output) { output.textContent += result.output; output.scrollTop = output.scrollHeight; }
+      const result = await api(
+        `/api/terminals/${encodeURIComponent(created.id)}?offset=${offset}`,
+      );
+      if (result.output) {
+        output.textContent += result.output;
+        output.scrollTop = output.scrollHeight;
+      }
       offset = result.offset;
-      if (result.closed) { stopped = true; input.disabled = true; return; }
-    } catch { stopped = true; input.disabled = true; return; }
+      if (result.closed) {
+        stopped = true;
+        input.disabled = true;
+        return;
+      }
+    } catch {
+      stopped = true;
+      input.disabled = true;
+      return;
+    }
     window.setTimeout(refresh, 180);
   };
   input.addEventListener("keydown", async (event) => {
     if (event.key !== "Enter" || input.disabled) return;
-    const command = input.value; input.value = "";
-    await api(`/api/terminals/${encodeURIComponent(created.id)}/input`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ input: `${command}\\n` }) });
+    const command = input.value;
+    input.value = "";
+    await api(`/api/terminals/${encodeURIComponent(created.id)}/input`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ input: `${command}\\n` }),
+    });
   });
-  const terminal = new window.WinBox({ title: hostWindowTitle(`Terminal — ${entry.name}`), mount: panel, class: "eta-window", x: "center", y: "center", width: Math.min(980, window.innerWidth - 64), height: Math.min(640, window.innerHeight - 120), bottom: 40, onclose: () => { stopped = true; void api(`/api/terminals/${encodeURIComponent(created.id)}`, { method: "DELETE" }); return false; } });
-  terminal.focus(); input.focus(); void refresh();
+  const terminal = new window.WinBox({
+    title: hostWindowTitle(`Terminal — ${entry.name}`),
+    mount: panel,
+    class: "eta-window",
+    x: "center",
+    y: "center",
+    width: Math.min(980, window.innerWidth - 64),
+    height: Math.min(640, window.innerHeight - 120),
+    bottom: 40,
+    onclose: () => {
+      stopped = true;
+      void api(`/api/terminals/${encodeURIComponent(created.id)}`, {
+        method: "DELETE",
+      });
+      return false;
+    },
+  });
+  terminal.focus();
+  input.focus();
+  void refresh();
 }
 
 async function openInspector(
@@ -789,7 +882,11 @@ async function openInspector(
     scheduleDesktopSave();
   };
   const peer = view.state.peer;
-  if (peer) panel.style.setProperty("--window-accent", COLORS[peer.accent]?.accent || "#7c6af7");
+  if (peer)
+    panel.style.setProperty(
+      "--window-accent",
+      COLORS[peer.accent]?.accent || "#7c6af7",
+    );
   const inspector = new WinBox({
     title: peer ? `${peer.glyph} ${entry.name}` : hostWindowTitle(entry.name),
     mount: panel,
@@ -815,7 +912,12 @@ async function openInspector(
   desktopWindows.set(key, {
     title: peer ? `${peer.glyph} ${entry.name}` : hostWindowTitle(entry.name),
     window: inspector,
-    state: () => ({ kind: "file", root: view.state.root, path: entry.path, peer: peer?.url }),
+    state: () => ({
+      kind: "file",
+      root: view.state.root,
+      path: entry.path,
+      peer: peer?.url,
+    }),
   });
   refreshTaskStrip();
   scheduleDesktopSave();
@@ -834,11 +936,7 @@ async function openInspector(
   actions
     .querySelector(".inspector-download")
     ?.addEventListener("click", () => {
-      window.open(
-        fileURL(view, entry.path, true),
-        "_blank",
-        "noopener",
-      );
+      window.open(fileURL(view, entry.path, true), "_blank", "noopener");
     });
 }
 
@@ -917,8 +1015,12 @@ function bindExplorer(view: ExplorerView) {
     (menu.querySelector('[data-file-action="cut"]') as HTMLElement).hidden =
       contextEntry.entry.kind !== "file";
     (menu.querySelector('[data-file-action="paste"]') as HTMLElement).hidden =
-      contextEntry.entry.kind !== "directory" || !explorerClipboard || explorerClipboard.entry.kind !== "file";
-    (menu.querySelector('[data-file-action="terminal"]') as HTMLElement).hidden = !!view.state.peer;
+      contextEntry.entry.kind !== "directory" ||
+      !explorerClipboard ||
+      explorerClipboard.entry.kind !== "file";
+    (
+      menu.querySelector('[data-file-action="terminal"]') as HTMLElement
+    ).hidden = !!view.state.peer;
     menu.style.left = `${event.clientX}px`;
     menu.style.top = `${event.clientY}px`;
     menu.hidden = false;
@@ -982,10 +1084,18 @@ async function loadDesktopState(): Promise<PersistedWindow[]> {
 }
 async function restoreFileWindow(restored: PersistedWindow) {
   try {
-    const peer = restored.peer ? enrolledPeers.find((candidate) => candidate.url === restored.peer) || null : null;
+    const peer = restored.peer
+      ? enrolledPeers.find((candidate) => candidate.url === restored.peer) ||
+        null
+      : null;
     if (restored.peer && !peer) return;
     const view = { state: { root: restored.root, peer } } as ExplorerView;
-    const result = await api(sourceURL(view, "list", { root: String(restored.root), path: restored.path || "" }));
+    const result = await api(
+      sourceURL(view, "list", {
+        root: String(restored.root),
+        path: restored.path || "",
+      }),
+    );
     if (result.entry?.kind !== "file") return;
     await openInspector(view, result.entry, restored);
   } catch {
@@ -1001,13 +1111,20 @@ async function boot() {
     // Explorer initialization reports an offline server through the normal UI.
   }
   if (window.WinBox && window.innerWidth >= 700) {
-    try { enrolledPeers = await api("/api/peers"); } catch { enrolledPeers = []; }
+    try {
+      enrolledPeers = await api("/api/peers");
+    } catch {
+      enrolledPeers = [];
+    }
     const restored = await loadDesktopState();
     restoringDesktop = true;
     const explorers = restored.filter((window) => window.kind === "explorer");
     if (explorers.length) {
       for (const window of explorers) {
-        const peer = window.peer ? enrolledPeers.find((candidate) => candidate.url === window.peer) || null : null;
+        const peer = window.peer
+          ? enrolledPeers.find((candidate) => candidate.url === window.peer) ||
+            null
+          : null;
         if (window.peer && !peer) continue;
         await openExplorerWindow(window, peer);
       }
@@ -1028,25 +1145,101 @@ async function boot() {
 async function completeCut(source: ExplorerEntry) {
   if (explorerClipboardOperation !== "cut") return;
   if (source.view.state.peer) {
-    await api(`/api/remote/delete?${new URLSearchParams({ peer: source.view.state.peer.url })}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ root: source.view.state.root, path: source.entry.path }) });
+    await api(
+      `/api/remote/delete?${new URLSearchParams({ peer: source.view.state.peer.url })}`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          root: source.view.state.root,
+          path: source.entry.path,
+        }),
+      },
+    );
   } else {
-    await api("/api/delete", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ root: source.view.state.root, path: source.entry.path }) });
+    await api("/api/delete", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        root: source.view.state.root,
+        path: source.entry.path,
+      }),
+    });
   }
   explorerClipboard = null;
   await navigate(source.view, source.view.state.path);
 }
 
-async function monitorCopy(jobID: string, sourcePeer: Peer | undefined, source: ExplorerEntry, destination: ExplorerEntry) {
+async function monitorCopy(
+  jobID: string,
+  sourcePeer: Peer | undefined,
+  source: ExplorerEntry,
+  destination: ExplorerEntry,
+) {
+  const taskID = `${sourcePeer?.url || "local"}:${jobID}`;
+  copyTasks.set(taskID, {
+    id: taskID,
+    name: source.entry.name,
+    completed: 0,
+    total: 0,
+    done: false,
+  });
+  refreshTaskStrip();
+  const finishTask = (error?: string) => {
+    const task = copyTasks.get(taskID);
+    if (!task) return;
+    task.done = true;
+    task.error = error;
+    task.completed = task.total || task.completed;
+    refreshTaskStrip();
+    window.setTimeout(
+      () => {
+        copyTasks.delete(taskID);
+        refreshTaskStrip();
+      },
+      error ? 12_000 : 4_000,
+    );
+  };
   const poll = async () => {
-    const endpoint = sourcePeer
-      ? `/api/remote/transfer-jobs?${new URLSearchParams({ peer: sourcePeer.url, id: jobID })}`
-      : `/api/transfer-jobs/${encodeURIComponent(jobID)}`;
-    const status = await api(endpoint);
-    if (!status.done) { window.setTimeout(() => void poll(), 300); return; }
-    if (status.error) { showToast(`Copy failed: ${status.error}`); return; }
-    await completeCut(source);
-    showToast(`${explorerClipboardOperation === "cut" ? "Moved" : "Copied"} ${source.entry.name}`, "success");
-    await navigate(destination.view, destination.view.state.path);
+    try {
+      const endpoint = sourcePeer
+        ? `/api/remote/transfer-jobs?${new URLSearchParams({ peer: sourcePeer.url, id: jobID })}`
+        : `/api/transfer-jobs/${encodeURIComponent(jobID)}`;
+      const status = await api(endpoint);
+      const task = copyTasks.get(taskID);
+      if (task) {
+        task.completed = status.completed || 0;
+        task.total = status.total || 0;
+        refreshTaskStrip();
+      }
+      if (!status.done) {
+        window.setTimeout(() => void poll(), 300);
+        return;
+      }
+      if (status.error) {
+        finishTask(status.error);
+        showToast(`Copy failed: ${status.error}`);
+        return;
+      }
+      try {
+        await completeCut(source);
+      } catch (error) {
+        finishTask((error as Error).message);
+        showToast(
+          `Copy completed but move could not remove its source: ${(error as Error).message}`,
+        );
+        return;
+      }
+      finishTask();
+      showToast(
+        `${explorerClipboardOperation === "cut" ? "Moved" : "Copied"} ${source.entry.name}`,
+        "success",
+      );
+      await navigate(destination.view, destination.view.state.path);
+    } catch (error) {
+      finishTask((error as Error).message);
+      showToast(`Copy status failed: ${(error as Error).message}`);
+    }
   };
   void poll();
 }
@@ -1060,19 +1253,52 @@ async function pasteIntoFolder(destination: ExplorerEntry) {
   const sourcePeer = source.view.state.peer;
   const destinationPeer = destination.view.state.peer;
   if (!sourcePeer && !destinationPeer) {
-    await api("/api/copy", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sourceRoot: source.view.state.root, sourcePath: source.entry.path, destinationRoot: destination.view.state.root, destinationPath }) });
+    await api("/api/copy", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        sourceRoot: source.view.state.root,
+        sourcePath: source.entry.path,
+        destinationRoot: destination.view.state.root,
+        destinationPath,
+      }),
+    });
     await completeCut(source);
-    showToast(`${explorerClipboardOperation === "cut" ? "Moved" : "Copied"} ${source.entry.name}`, "success");
+    showToast(
+      `${explorerClipboardOperation === "cut" ? "Moved" : "Copied"} ${source.entry.name}`,
+      "success",
+    );
     await navigate(destination.view, destination.view.state.path);
     return;
   }
   if (!sourcePeer) {
-    const job = await api("/api/transfers/send", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ peer: destinationPeer!.url, sourceRoot: source.view.state.root, sourcePath: source.entry.path, destinationRoot: destination.view.state.root, destinationPath }) });
+    const job = await api("/api/transfers/send", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        peer: destinationPeer!.url,
+        sourceRoot: source.view.state.root,
+        sourcePath: source.entry.path,
+        destinationRoot: destination.view.state.root,
+        destinationPath,
+      }),
+    });
     showToast(`Copying ${source.entry.name}…`);
     await monitorCopy(job.id, undefined, source, destination);
     return;
   }
-  const job = await api("/api/remote/transfers/send", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sourcePeer: sourcePeer.url, destinationPeer: destinationPeer?.url || "", sourceRoot: source.view.state.root, sourcePath: source.entry.path, destinationRoot: destination.view.state.root, destinationPath }) });
+  const job = await api("/api/remote/transfers/send", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      sourcePeer: sourcePeer.url,
+      destinationPeer: destinationPeer?.url || "",
+      sourceRoot: source.view.state.root,
+      sourcePath: source.entry.path,
+      destinationRoot: destination.view.state.root,
+      destinationPath,
+    }),
+  });
   showToast(`Copying ${source.entry.name}…`);
   await monitorCopy(job.id, sourcePeer, source, destination);
 }
@@ -1090,10 +1316,15 @@ $("#file-context-menu").addEventListener("click", async (event) => {
       await openTerminal(target.view, target.entry);
       return;
     }
-    if (action.dataset.fileAction === "copy" || action.dataset.fileAction === "cut") {
+    if (
+      action.dataset.fileAction === "copy" ||
+      action.dataset.fileAction === "cut"
+    ) {
       explorerClipboard = target;
       explorerClipboardOperation = action.dataset.fileAction;
-      showToast(`${explorerClipboardOperation === "cut" ? "Cut" : "Copied"} ${target.entry.name} to clipboard`);
+      showToast(
+        `${explorerClipboardOperation === "cut" ? "Cut" : "Copied"} ${target.entry.name} to clipboard`,
+      );
       return;
     }
     if (action.dataset.fileAction === "paste") {
@@ -1148,9 +1379,16 @@ $("#task-strip").addEventListener("click", (event) => {
   const button = (event.target as HTMLElement).closest(
     "[data-window]",
   ) as HTMLElement | null;
-  if (button) { focusDesktopWindow(button.dataset.window || ""); return; }
-  const peerButton = (event.target as HTMLElement).closest("[data-peer]") as HTMLElement | null;
-  const peer = enrolledPeers.find((candidate) => candidate.url === peerButton?.dataset.peer);
+  if (button) {
+    focusDesktopWindow(button.dataset.window || "");
+    return;
+  }
+  const peerButton = (event.target as HTMLElement).closest(
+    "[data-peer]",
+  ) as HTMLElement | null;
+  const peer = enrolledPeers.find(
+    (candidate) => candidate.url === peerButton?.dataset.peer,
+  );
   if (peer) void openExplorerWindow(undefined, peer);
 });
 $("#download-button").addEventListener("click", () => {
