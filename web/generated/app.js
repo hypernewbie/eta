@@ -832,19 +832,30 @@ function bindExplorer(view) {
     });
     view.element("entries").addEventListener("contextmenu", (event) => {
         const row = event.target.closest(".entry");
-        if (!row || row.dataset.parent)
+        if (row?.dataset.parent)
             return;
         event.preventDefault();
-        contextEntry = {
-            view,
-            entry: {
-                path: row.dataset.path || "",
-                name: row.querySelector(".entry-name, .grid-name")?.textContent || "",
-                kind: row.dataset.kind,
-                size: Number(row.dataset.size),
-                modified: row.dataset.modified || "",
-            },
-        };
+        contextEntry = row
+            ? {
+                view,
+                entry: {
+                    path: row.dataset.path || "",
+                    name: row.querySelector(".entry-name, .grid-name")?.textContent || "",
+                    kind: row.dataset.kind,
+                    size: Number(row.dataset.size),
+                    modified: row.dataset.modified || "",
+                },
+            }
+            : {
+                view,
+                entry: {
+                    path: view.state.path,
+                    name: view.state.path.split("/").pop() || "Root",
+                    kind: "directory",
+                    size: 0,
+                    modified: "",
+                },
+            };
         const menu = $("#file-context-menu");
         menu.querySelector('[data-file-action="trusted-html"]').hidden = !htmlExtensions.has(extension(contextEntry.entry.name));
         menu.querySelector('[data-file-action="copy"]').hidden =
@@ -855,7 +866,11 @@ function bindExplorer(view) {
             contextEntry.entry.kind !== "directory" ||
                 !explorerClipboard ||
                 explorerClipboard.entry.kind !== "file";
-        menu.querySelector('[data-file-action="terminal"]').hidden = !!view.state.peer;
+        menu.querySelector('[data-file-action="terminal"]').hidden = !row || !!view.state.peer;
+        menu.querySelector('[data-file-action="rename"]').hidden =
+            !row || !!view.state.peer;
+        menu.querySelector('[data-file-action="delete"]').hidden =
+            !row || !!view.state.peer;
         menu.style.left = `${event.clientX}px`;
         menu.style.top = `${event.clientY}px`;
         menu.hidden = false;

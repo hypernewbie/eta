@@ -994,18 +994,30 @@ function bindExplorer(view: ExplorerView) {
     const row = (event.target as HTMLElement).closest(
       ".entry",
     ) as HTMLElement | null;
-    if (!row || row.dataset.parent) return;
+    if (row?.dataset.parent) return;
     event.preventDefault();
-    contextEntry = {
-      view,
-      entry: {
-        path: row.dataset.path || "",
-        name: row.querySelector(".entry-name, .grid-name")?.textContent || "",
-        kind: row.dataset.kind as Entry["kind"],
-        size: Number(row.dataset.size),
-        modified: row.dataset.modified || "",
-      },
-    };
+    contextEntry = row
+      ? {
+          view,
+          entry: {
+            path: row.dataset.path || "",
+            name:
+              row.querySelector(".entry-name, .grid-name")?.textContent || "",
+            kind: row.dataset.kind as Entry["kind"],
+            size: Number(row.dataset.size),
+            modified: row.dataset.modified || "",
+          },
+        }
+      : {
+          view,
+          entry: {
+            path: view.state.path,
+            name: view.state.path.split("/").pop() || "Root",
+            kind: "directory",
+            size: 0,
+            modified: "",
+          },
+        };
     const menu = $("#file-context-menu");
     (
       menu.querySelector('[data-file-action="trusted-html"]') as HTMLElement
@@ -1020,7 +1032,11 @@ function bindExplorer(view: ExplorerView) {
       explorerClipboard.entry.kind !== "file";
     (
       menu.querySelector('[data-file-action="terminal"]') as HTMLElement
-    ).hidden = !!view.state.peer;
+    ).hidden = !row || !!view.state.peer;
+    (menu.querySelector('[data-file-action="rename"]') as HTMLElement).hidden =
+      !row || !!view.state.peer;
+    (menu.querySelector('[data-file-action="delete"]') as HTMLElement).hidden =
+      !row || !!view.state.peer;
     menu.style.left = `${event.clientX}px`;
     menu.style.top = `${event.clientY}px`;
     menu.hidden = false;
