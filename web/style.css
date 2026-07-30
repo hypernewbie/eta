@@ -915,35 +915,18 @@ iconify-icon.entry-icon {
   backdrop-filter: blur(26px) saturate(175%);
 }
 .terminal-panel {
-  display: grid;
-  grid-template-rows: minmax(0, 1fr) auto;
   height: 100%;
-  background: #07080d;
+  overflow: hidden;
+  background: #090a0d;
 }
-.terminal-output {
-  margin: 0;
-  overflow: auto;
-  padding: 16px;
-  color: #d4d7e5;
-  font:
-    13px/1.45 "JetBrains Mono",
-    ui-monospace,
-    monospace;
-  white-space: pre-wrap;
-}
-.terminal-input {
+.terminal-xterm {
   box-sizing: border-box;
   width: 100%;
-  border: 0;
-  border-top: 1px solid #292d3c;
-  border-radius: 0;
-  background: #10121a;
-  color: #f3f4fa;
-  padding: 12px 16px;
-  font:
-    13px "JetBrains Mono",
-    ui-monospace,
-    monospace;
+  height: 100%;
+  padding: 12px;
+}
+.terminal-xterm .xterm {
+  height: 100%;
 }
 .peer-window .wb-header::before {
   background: var(--window-accent);

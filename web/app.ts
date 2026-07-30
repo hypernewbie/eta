@@ -6,6 +6,8 @@ interface Window {
   hljs?: any;
   Prism?: any;
   WinBox?: new (options: WinBoxOptions) => WinBoxInstance;
+  Terminal?: new (options: Record<string, unknown>) => XTermInstance;
+  FitAddon?: { FitAddon: new () => XTermFitAddon };
 }
 
 type WinBoxOptions = {
@@ -28,6 +30,18 @@ type WinBoxOptions = {
   onrestore?: () => void;
   onminimize?: () => void;
 };
+type XTermInstance = {
+  cols: number;
+  rows: number;
+  loadAddon: (addon: XTermFitAddon) => void;
+  open: (element: HTMLElement) => void;
+  write: (data: string) => void;
+  onData: (callback: (data: string) => void) => void;
+  focus: () => void;
+  dispose: () => void;
+};
+type XTermFitAddon = { fit: () => void };
+
 type WinBoxInstance = {
   focus: () => void;
   restore: () => void;
@@ -816,12 +830,30 @@ async function openTerminal(view: ExplorerView, entry: Entry) {
   });
   const panel = document.createElement("section");
   panel.className = "terminal-panel";
-  const output = document.createElement("pre");
-  output.className = "terminal-output";
-  const input = document.createElement("input");
-  input.className = "terminal-input";
-  input.placeholder = "Type a command and press Enter";
-  panel.append(output, input);
+  const terminalHost = document.createElement("div");
+  terminalHost.className = "terminal-xterm";
+  panel.append(terminalHost);
+  // xterm.js is a version-pinned MIT CDN dependency. Eta owns the PTY API and
+  // polling transport; no Phi terminal implementation is copied here.
+  const xterm = window.Terminal
+    ? new window.Terminal({
+        cursorBlink: true,
+        fontFamily: '"JetBrains Mono", ui-monospace, monospace',
+        fontSize: 13,
+        theme: {
+          background: "#090a0d",
+          foreground: "#e4e6ed",
+          cursor: "#b4a7ff",
+        },
+      })
+    : null;
+  const fit = xterm && window.FitAddon ? new window.FitAddon.FitAddon() : null;
+  if (xterm) {
+    if (fit) xterm.loadAddon(fit);
+    xterm.open(terminalHost);
+  } else {
+    terminalHost.textContent = "Terminal renderer did not load.";
+  }
   let offset = 0;
   let stopped = false;
   const refresh = async () => {
@@ -830,33 +862,37 @@ async function openTerminal(view: ExplorerView, entry: Entry) {
       const result = await api(
         `/api/terminals/${encodeURIComponent(created.id)}?offset=${offset}`,
       );
-      if (result.output) {
-        output.textContent += result.output;
-        output.scrollTop = output.scrollHeight;
-      }
+      if (result.output) xterm?.write(result.output);
       offset = result.offset;
       if (result.closed) {
         stopped = true;
-        input.disabled = true;
         return;
       }
     } catch {
       stopped = true;
-      input.disabled = true;
       return;
     }
     window.setTimeout(refresh, 180);
   };
-  input.addEventListener("keydown", async (event) => {
-    if (event.key !== "Enter" || input.disabled) return;
-    const command = input.value;
-    input.value = "";
-    await api(`/api/terminals/${encodeURIComponent(created.id)}/input`, {
+  const sendResize = () => {
+    if (!xterm || stopped) return;
+    fit?.fit();
+    void api(`/api/terminals/${encodeURIComponent(created.id)}/resize`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ input: `${command}\\n` }),
+      body: JSON.stringify({ columns: xterm.cols, rows: xterm.rows }),
+    });
+  };
+  xterm?.onData((input) => {
+    if (stopped) return;
+    void api(`/api/terminals/${encodeURIComponent(created.id)}/input`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ input }),
     });
   });
+  const resizeObserver = new ResizeObserver(sendResize);
+  resizeObserver.observe(panel);
   const terminal = new window.WinBox({
     title: hostWindowTitle(`Terminal — ${entry.name}`),
     mount: panel,
@@ -866,8 +902,13 @@ async function openTerminal(view: ExplorerView, entry: Entry) {
     width: Math.min(980, window.innerWidth - 64),
     height: Math.min(640, window.innerHeight - 120),
     bottom: 40,
+    onresize: sendResize,
+    onmaximize: sendResize,
+    onrestore: sendResize,
     onclose: () => {
       stopped = true;
+      resizeObserver.disconnect();
+      xterm?.dispose();
       void api(`/api/terminals/${encodeURIComponent(created.id)}`, {
         method: "DELETE",
       });
@@ -875,7 +916,8 @@ async function openTerminal(view: ExplorerView, entry: Entry) {
     },
   });
   terminal.focus();
-  input.focus();
+  sendResize();
+  xterm?.focus();
   void refresh();
 }
 
