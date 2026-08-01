@@ -37,3 +37,53 @@ test("Explorer can drag from its title bar and still maximize and restore", asyn
   await maximize.click();
   await expect(explorer).not.toHaveClass(/max/);
 });
+
+test("scrolling the file list keeps the toolbar and column header in place", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto("/");
+
+  const win = page.locator(".winbox.eta-window").first();
+  await expect(win.locator(".entry").first()).toBeVisible();
+
+  // The list must overflow for this to prove anything. The test root is
+  // the repo, which is comfortably taller than the window.
+  const overflows = await win
+    .locator(".entries")
+    .evaluate((el) => el.scrollHeight > el.clientHeight + 1);
+  expect(overflows).toBe(true);
+
+  // Positions relative to the window body, so this measures the chrome
+  // staying put rather than the page not moving.
+  const chrome = async () =>
+    await win.evaluate((w) => {
+      const top = w.querySelector(".wb-body")!.getBoundingClientRect().top;
+      const at = (s: string) =>
+        Math.round(w.querySelector(s)!.getBoundingClientRect().top - top);
+      return {
+        toolbar: at(".toolbar"),
+        head: at(".table-head"),
+        footer: at(".panel-footer"),
+        firstRow: at(".entry"),
+      };
+    });
+
+  const before = await chrome();
+  await win.locator(".entries").evaluate((el) => {
+    el.scrollTop = el.scrollHeight;
+  });
+  const after = await chrome();
+
+  expect(after.firstRow).toBeLessThan(before.firstRow - 100);
+  expect(after.toolbar).toBe(before.toolbar);
+  expect(after.head).toBe(before.head);
+  expect(after.footer).toBe(before.footer);
+
+  // The window itself must not be a scroller, or the chrome leaves with
+  // the list however the inner list is configured.
+  const bodyScrolls = await win
+    .locator(".wb-body")
+    .evaluate((el) => el.scrollHeight > el.clientHeight + 1);
+  expect(bodyScrolls).toBe(false);
+});

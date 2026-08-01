@@ -1172,12 +1172,47 @@ svg.file-type-icon {
     radial-gradient(ellipse at 50% 0%, var(--accent-trace), transparent 44%),
     rgba(8, 8, 10, 0.58);
 }
+/* Only the file list scrolls. The panel fills the window exactly and is
+   a flex column, so the chrome around the list — tabs, root picker,
+   breadcrumbs, the view/up/refresh buttons, the column header and the
+   status bar — stays put, the way a file manager behaves. Otherwise
+   .wb-body is the only scroller and takes the whole panel with it:
+   measured 1588px of content in a 647px window, which parked the
+   toolbar 908px above the viewport and left the footer reachable only
+   by scrolling to the bottom. */
 .wb-body > .browser-panel {
-  min-height: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
   margin: 0;
   border: 0;
   border-radius: 0;
   box-shadow: none;
+}
+.wb-body > .browser-panel > .tab-strip,
+.wb-body > .browser-panel > .toolbar,
+.wb-body > .browser-panel > .panel-footer {
+  flex: 0 0 auto;
+}
+.wb-body > .browser-panel > .file-table {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  /* min-height: 0 defeats the default min-height: auto on a flex item,
+     which would otherwise hold the list at its full content height and
+     push the scrolling back onto .wb-body. The 355px floor is for the
+     standalone panel and must not apply here. */
+  min-height: 0;
+  overflow: hidden;
+}
+.wb-body > .browser-panel > .file-table > .table-head {
+  flex: 0 0 auto;
+}
+.wb-body > .browser-panel > .file-table > .entries {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
 }
 .inspector-window {
   display: flex;
