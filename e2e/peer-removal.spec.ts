@@ -8,7 +8,7 @@
 import { expect, test } from "./_setup";
 import { PEER_URL, startPeer, writeTextFile } from "./_peer";
 
-test("η menu removes a peer once its inventory entry is deleted", async ({
+test("η menu removes a peer once its inventory entry is deleted @peer", async ({
   page,
   request,
 }) => {

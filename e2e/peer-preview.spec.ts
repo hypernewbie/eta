@@ -9,7 +9,7 @@
 import { expect, test } from "./_setup";
 import { PEER_URL, startPeer, seedCleanPeerDir } from "./_peer";
 
-test("opening a file in a peer Explorer mounts a peer-accented inspector", async ({
+test("opening a file in a peer Explorer mounts a peer-accented inspector @peer", async ({
   page,
   request,
 }) => {

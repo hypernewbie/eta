@@ -6,7 +6,8 @@
     "build:web": "tsc --project tsconfig.json",
     "check:web": "tsc --noEmit --project tsconfig.json",
     "format:web": "prettier --write web/app.ts web/style.css web/index.html",
-    "test:web": "playwright test"
+    "test:web": "playwright test",
+    "test:web:fast": "playwright test --grep-invert=@peer"
   },
   "devDependencies": {
     "@playwright/test": "^1.52.0",
