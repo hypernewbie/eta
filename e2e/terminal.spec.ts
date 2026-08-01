@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./_setup";
 
 test("local Explorer opens an xterm-backed terminal window", async ({ page }) => {
   await page.goto("/");

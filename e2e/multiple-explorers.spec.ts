@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./_setup";
 
 test("launcher opens independently navigable Explorer windows", async ({
   page,

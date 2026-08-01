@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./_setup";
 
 test("taskbar closes and reopens Explorer", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });

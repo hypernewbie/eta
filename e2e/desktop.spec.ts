@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./_setup";
 
 test("Explorer can drag from its title bar and still maximize and restore", async ({
   page,

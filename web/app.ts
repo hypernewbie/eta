@@ -550,6 +550,20 @@ function scheduleDesktopSave() {
   stateSaveTimer = window.setTimeout(() => void saveDesktopState(), 400);
 }
 
+// Structural changes (open/close) must persist immediately so a closed
+// window cannot resurrect from a stale state file after a fast tab close
+// or test teardown. Geometry (drag/resize/maximize) stays debounced via
+// scheduleDesktopSave. Both paths share the timer: the flush cancels any
+// pending debounced save before triggering one synchronously.
+function flushDesktopSave() {
+  if (!desktopEnabled() || restoringDesktop) return;
+  if (stateSaveTimer) {
+    window.clearTimeout(stateSaveTimer);
+    stateSaveTimer = undefined;
+  }
+  void saveDesktopState();
+}
+
 async function loadCopyTasks() {
   try {
     const jobs = await api("/api/transfer-jobs");
@@ -678,6 +692,7 @@ async function openExplorerWindow(
       if (activeWindowKey === key) activeWindowKey = null;
       explorerViews.delete(key);
       windowChanged();
+      flushDesktopSave();
       queueMicrotask(() => panel.remove());
     },
     onfocus: windowFocused,
@@ -703,7 +718,7 @@ async function openExplorerWindow(
   explorerViews.set(key, view);
   activeWindowKey = key;
   refreshTaskStrip();
-  scheduleDesktopSave();
+  flushDesktopSave();
   await initializeExplorer(view, restored);
 }
 
@@ -982,10 +997,10 @@ async function openTerminal(view: ExplorerView, entry: Entry) {
       desktopWindows.delete(key);
       if (activeWindowKey === key) activeWindowKey = null;
       refreshTaskStrip();
+      flushDesktopSave();
       void api(terminalURL(view, created.id), {
         method: "DELETE",
       });
-      return false;
     },
   });
   colorWindow(terminal, view.state.peer);
@@ -1060,6 +1075,7 @@ async function openInspector(
       desktopWindows.delete(key);
       if (activeWindowKey === key) activeWindowKey = null;
       windowChanged();
+      flushDesktopSave();
     },
     onfocus: windowFocused,
     onmove: windowChanged,
@@ -1083,7 +1099,7 @@ async function openInspector(
   });
   activeWindowKey = key;
   refreshTaskStrip();
-  scheduleDesktopSave();
+  flushDesktopSave();
   const result = await renderPreview(view, entry, content);
   const copy = actions.querySelector(".inspector-copy") as any;
   copy.disabled = result.binary;
