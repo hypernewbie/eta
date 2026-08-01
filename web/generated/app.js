@@ -1108,7 +1108,19 @@ async function openTerminal(view, entry) {
             }
         }
     };
-    void streamOutput();
+    // One reader per terminal. Two concurrent SSE readers on the same
+    // xterm write every byte twice, which shows up as doubled keystroke
+    // echo, doubled prompts and doubled command output — the terminal
+    // looks like it is running everything twice when it is only being
+    // drawn twice. Guarded so a second call site cannot reintroduce it.
+    let streaming = false;
+    const startStream = () => {
+        if (streaming)
+            return;
+        streaming = true;
+        void streamOutput();
+    };
+    startStream();
     const sendResize = () => {
         if (!xterm || stopped)
             return;
@@ -1182,7 +1194,6 @@ async function openTerminal(view, entry) {
     terminal.focus();
     sendResize();
     xterm?.focus();
-    void streamOutput();
 }
 async function openInspector(view, entry, restored) {
     const WinBox = window.WinBox;
