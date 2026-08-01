@@ -1361,6 +1361,46 @@ body.windowed {
 .terminal-xterm .xterm {
   height: 100%;
 }
+/* The fit addon sizes columns to
+     parent width - padding - viewport.scrollBarWidth
+   and with Chromium's overlay scrollbars that last term is 0, because
+   an overlay scrollbar takes no layout width. So the terminal claimed
+   the full width and the scrollbar was painted on top of the final
+   column. Giving the viewport an explicit scrollbar width switches it
+   to a laid-out one: it reports a real width, the fit addon subtracts
+   it, and the text stops running underneath. */
+.terminal-xterm .xterm-viewport {
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(
+      in srgb,
+      var(--window-accent, var(--accent)) 40%,
+      transparent
+    )
+    transparent;
+}
+.terminal-xterm .xterm-viewport::-webkit-scrollbar {
+  width: 10px;
+}
+.terminal-xterm .xterm-viewport::-webkit-scrollbar-track {
+  background: transparent;
+}
+.terminal-xterm .xterm-viewport::-webkit-scrollbar-thumb {
+  border: 3px solid transparent;
+  border-radius: 999px;
+  background-clip: content-box;
+  background-color: color-mix(
+    in srgb,
+    var(--window-accent, var(--accent)) 38%,
+    transparent
+  );
+}
+.terminal-xterm .xterm-viewport::-webkit-scrollbar-thumb:hover {
+  background-color: color-mix(
+    in srgb,
+    var(--window-accent, var(--accent)) 62%,
+    transparent
+  );
+}
 /* Windows carry their source computer's identity; the desktop around them stays neutral. */
 .identity-window .wb-header::before {
   background: var(--window-accent);
