@@ -1304,52 +1304,59 @@ svg.file-type-icon {
 .inspector-actions {
   display: flex;
   align-items: center;
-  justify-content: flex-end;
-  gap: 8px;
-  padding: 10px 16px;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 7px 10px 7px 16px;
   border-top: 1px solid var(--bg-border);
   background: rgba(0, 0, 0, 0.14);
 }
-/* Shoelace's own variants are a fixed blue that ignores the identity
-   accent the rest of the window is themed with. */
-.inspector-actions sl-button::part(base) {
-  min-height: 30px;
-  align-items: center;
-  border: 1px solid color-mix(in srgb, var(--identity-accent) 34%, transparent);
-  border-radius: 6px;
-  background: color-mix(in srgb, var(--identity-accent) 10%, transparent);
-  color: var(--text-primary);
-  font-size: 12px;
+/* Left half states what the file is; the viewer should not make you
+   guess the language, length or age of what you are reading. */
+.inspector-facts {
+  overflow: hidden;
+  color: var(--text-dim);
+  font-size: 10px;
   font-family: var(--font-mono);
   line-height: 1;
-  letter-spacing: 0.03em;
+  letter-spacing: 0.04em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
-.inspector-actions sl-button::part(label) {
+.inspector-buttons {
   display: flex;
+  flex: 0 0 auto;
   align-items: center;
-  gap: 6px;
-  line-height: 1;
+  gap: 2px;
 }
-.inspector-actions sl-button[variant="primary"]::part(base) {
-  border-color: var(--identity-accent);
-  background: color-mix(in srgb, var(--identity-accent) 22%, transparent);
+.inspector-buttons .icon-button {
+  width: 28px;
+  height: 28px;
+}
+.inspector-buttons .icon-button svg {
+  width: 15px;
+  height: 15px;
+}
+.inspector-buttons .icon-button:hover:not(:disabled) {
   color: var(--identity-accent);
+  background: color-mix(in srgb, var(--identity-accent) 16%, transparent);
+  border-color: color-mix(in srgb, var(--identity-accent) 32%, transparent);
 }
-.inspector-actions sl-button:hover::part(base) {
-  border-color: var(--identity-accent);
-  background: color-mix(in srgb, var(--identity-accent) 30%, transparent);
-  color: #fff;
+.inspector-buttons .icon-button.is-active {
+  color: var(--identity-accent);
+  background: color-mix(in srgb, var(--identity-accent) 14%, transparent);
+  border-color: color-mix(in srgb, var(--identity-accent) 30%, transparent);
 }
-.inspector-actions sl-button[disabled]::part(base) {
-  opacity: 0.45;
+.inspector-buttons .icon-button.is-done {
+  color: var(--green, #10b981);
 }
-/* Lucide swaps the <i> placeholder for an <svg>, so rules written for
-   <i> alone never reach the rendered icon. */
-.inspector-actions sl-button i,
-.inspector-actions sl-button svg {
-  width: 14px;
-  height: 14px;
-  flex: 0 0 14px;
+.inspector-buttons .icon-button:disabled {
+  opacity: 0.35;
+}
+/* Off by default so code keeps its columns; on demand for prose and
+   long single-line files. */
+.preview-text.is-wrapped {
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
 }
 @media (max-width: 650px) {
   .app-shell {

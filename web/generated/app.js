@@ -968,14 +968,18 @@ function renderText(raw, truncated, ext) {
     const [prismLanguage, label] = language;
     return `<section class="code-inspector"><header class="code-toolbar${truncated ? " is-truncated" : ""}"><span>${label}</span><span>${truncated ? "preview truncated at 512 KB" : ""}</span></header><pre class="preview-text line-numbers language-${prismLanguage}"><code class="language-${prismLanguage}">${escapeHTML(raw)}</code></pre></section>`;
 }
-async function renderPreview(view, entry, container) {
+async function renderPreview(view, entry, container, 
+// The dialog has only a thin label, so it still wants the name/size/date
+// line. A window puts the name in its title bar, so repeating it there
+// is just a second title.
+facts = true) {
     container.innerHTML = '<div class="empty"><sl-spinner></sl-spinner></div>';
     let rawText = "";
     let binary = true;
     try {
         const ext = extension(entry.name);
         const source = fileURL(view, entry.path);
-        let content = fileFacts(entry);
+        let content = facts ? fileFacts(entry) : "";
         if (imageExtensions.has(ext))
             content += `<img class="preview-image" alt="${escapeHTML(entry.name)}" src="${source}">`;
         else if (audioExtensions.has(ext))
@@ -1214,8 +1218,17 @@ async function openInspector(view, entry, restored) {
     content.className = "inspector-content";
     const actions = document.createElement("footer");
     actions.className = "inspector-actions";
+    // One bar: what you are looking at on the left, what you can do with
+    // it on the right. Actions are icon buttons with tooltips rather than
+    // two full-width labelled buttons, which is a lot of furniture for a
+    // read-only viewer.
     actions.innerHTML =
-        '<sl-button class="inspector-copy" disabled><i data-lucide="copy"></i> Copy text</sl-button><sl-button class="inspector-download" variant="primary"><i data-lucide="download"></i> Download</sl-button>';
+        '<span class="inspector-facts"></span>' +
+            '<span class="inspector-buttons">' +
+            '<button type="button" class="inspector-wrap icon-button" title="Toggle word wrap" aria-pressed="false"><i data-lucide="wrap-text"></i></button>' +
+            '<button type="button" class="inspector-copy icon-button" title="Copy text" disabled><i data-lucide="copy"></i></button>' +
+            '<button type="button" class="inspector-download icon-button" title="Download"><i data-lucide="download"></i></button>' +
+            "</span>";
     panel.append(content, actions);
     const windowChanged = () => {
         refreshTaskStrip();
@@ -1272,20 +1285,57 @@ async function openInspector(view, entry, restored) {
     activeWindowKey = key;
     refreshTaskStrip();
     flushDesktopSave();
-    const result = await renderPreview(view, entry, content);
+    const result = await renderPreview(view, entry, content, false);
+    // Facts move to the status bar, and gain the two a viewer should
+    // report that a directory listing cannot: syntax and line count.
+    const code = content.querySelector(".code-inspector");
+    const language = code
+        ?.querySelector(".code-toolbar span:first-child")
+        ?.textContent?.trim();
+    const lines = result.rawText ? result.rawText.split("\n").length : 0;
+    actions.querySelector(".inspector-facts").textContent = [
+        language,
+        lines ? `${lines} ${lines === 1 ? "line" : "lines"}` : "",
+        bytes(entry.size),
+        date(entry.modified),
+    ]
+        .filter(Boolean)
+        .join("  ·  ");
+    const pre = content.querySelector(".preview-text");
+    const wrap = actions.querySelector(".inspector-wrap");
+    // Long lines otherwise mean horizontal scrolling with no way out.
+    if (!pre)
+        wrap.hidden = true;
+    wrap.addEventListener("click", () => {
+        const wrapped = pre.classList.toggle("is-wrapped");
+        wrap.setAttribute("aria-pressed", String(wrapped));
+        wrap.classList.toggle("is-active", wrapped);
+    });
     const copy = actions.querySelector(".inspector-copy");
-    copy.disabled = result.binary;
+    copy.disabled = result.binary || !result.rawText;
     copy.addEventListener("click", async () => {
         if (!result.rawText)
             return;
         try {
             await navigator.clipboard.writeText(result.rawText);
-            showToast("Copied text", "success");
+            // Confirm on the control that was pressed, not only in a toast
+            // in the corner of the screen.
+            copy.classList.add("is-done");
+            copy.title = "Copied";
+            copy.innerHTML = '<i data-lucide="check"></i>';
+            iconify();
+            window.setTimeout(() => {
+                copy.classList.remove("is-done");
+                copy.title = "Copy text";
+                copy.innerHTML = '<i data-lucide="copy"></i>';
+                iconify();
+            }, 1400);
         }
         catch {
             showToast("Clipboard access was denied");
         }
     });
+    iconify();
     actions
         .querySelector(".inspector-download")
         ?.addEventListener("click", () => {
