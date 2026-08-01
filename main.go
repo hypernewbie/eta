@@ -1546,11 +1546,15 @@ func (s *server) handlePeers(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	// Answer from the inventory and re-probe behind it. A peer that is
-	// slow or switched off must not delay the desktop coming up, so the
-	// refreshed colours land on the next poll rather than blocking this
-	// one.
-	go s.refreshPeerIdentities(context.WithoutCancel(r.Context()), items)
+	// Probing is opt-in per request. Every caller doing it would mean a
+	// burst of identity requests to every PC on every listing; the
+	// client asks for it once per page load instead.
+	if r.URL.Query().Get("refresh") == "1" {
+		s.refreshPeerIdentities(r.Context(), items)
+		if refreshed, err := s.peers.List(); err == nil {
+			items = refreshed
+		}
+	}
 	writeJSON(w, http.StatusOK, items)
 }
 
