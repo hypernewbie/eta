@@ -12,7 +12,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node
 import { join } from "node:path";
 import { PEER_URL, startPeer } from "./_peer";
 
-test("copying a directory tree delivers nested files intact to a peer", async ({
+test("copying a directory tree delivers nested files intact to a peer @peer", async ({
   page,
   request,
 }) => {
@@ -44,7 +44,7 @@ test("copying a directory tree delivers nested files intact to a peer", async ({
     // Focus the local Explorer via the task strip and drill into
     // test-results/ so dir-source/ is visible as a directory entry.
     await page
-      .locator("#task-strip .task-button", { hasText: "Explorer" })
+      .locator('#task-strip .task-window[data-window^="explorer:"]')
       .first()
       .click();
     await local
@@ -66,7 +66,7 @@ test("copying a directory tree delivers nested files intact to a peer", async ({
 
     // Switch to the peer Explorer and paste into destination.
     await page
-      .locator("#task-strip .task-button", { hasText: "Explorer" })
+      .locator('#task-strip .task-window[data-window^="explorer:"]')
       .last()
       .click();
     await remote

@@ -2,6 +2,7 @@ import { expect, test } from "./_setup";
 
 test("taskbar closes and reopens Explorer", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
+  const roots = await page.request.get("/api/roots").then((r) => r.json());
   await page.goto("/");
 
   const taskbar = page.locator("#taskbar");
@@ -16,7 +17,9 @@ test("taskbar closes and reopens Explorer", async ({ page }) => {
   await expect(explorer).toBeVisible();
   const explorerTask = page.locator("#task-strip .task-window");
   await expect(explorerTask).toHaveCount(1);
-  await expect(explorerTask).toHaveAttribute("title", /Explorer/);
+  // The dock button carries the window's full title, which names the
+  // folder the Explorer is showing rather than the application.
+  expect(await explorerTask.getAttribute("title")).toContain(roots[0].name);
   const explorerTaskBox = await explorerTask.boundingBox();
   expect(explorerTaskBox?.width).toBeGreaterThanOrEqual(132);
 

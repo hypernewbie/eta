@@ -6,11 +6,17 @@ test("local host identity labels the desktop and its windows", async ({
   await page.setViewportSize({ width: 1440, height: 900 });
   const response = await page.request.get("/api/identity");
   const identity = await response.json();
+  const roots = await page.request.get("/api/roots").then((r) => r.json());
   await page.goto("/");
 
-  await expect(page.locator("#hostname-display")).toHaveText(identity.hostname);
+  // The header renders the hostname uppercase to match phi's brand area.
+  await expect(page.locator("#hostname-display")).toHaveText(
+    identity.hostname.toUpperCase(),
+  );
   const title = page.locator(".winbox .wb-title").first();
-  await expect(title).toContainText(`${identity.glyph} Explorer`);
+  // A window is titled with the folder it is showing, not with the app
+  // name, so at the top of a root that is the root's own name.
+  await expect(title).toContainText(`${identity.glyph} ${roots[0].name}`);
   await expect(title).toHaveCSS("color", await page.evaluate(() => {
     const identityColor = getComputedStyle(document.documentElement).getPropertyValue("--identity-accent");
     const probe = document.createElement("i");

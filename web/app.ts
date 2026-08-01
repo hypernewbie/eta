@@ -43,6 +43,7 @@ type XTermInstance = {
 type XTermFitAddon = { fit: () => void };
 
 type WinBoxInstance = {
+  setTitle: (title: string) => void;
   focus: () => void;
   restore: () => void;
   minimize: () => void;
@@ -460,6 +461,18 @@ function setTheme(name: string, persist = true) {
 function hostWindowTitle(title: string) {
   return `${localHost.glyph} ${title}`;
 }
+// Windows Explorer titles a window with the folder you are in, not with
+// the application name. Eta follows that: the glyph says which host owns
+// the window, the label says which folder it is showing. At the top of a
+// root the root's own name is the folder.
+function explorerFolderLabel(state: AppState) {
+  const segment = state.path.split("/").filter(Boolean).pop();
+  return segment || state.roots[state.root]?.name || "/";
+}
+function explorerWindowTitle(view: ExplorerView) {
+  const glyph = view.state.peer?.glyph || localHost.glyph;
+  return `${glyph} ${explorerFolderLabel(view.state)}`;
+}
 function windowAccent(peer: Peer | null) {
   return peer
     ? COLORS[peer.accent]?.accent || "#7c6af7"
@@ -703,6 +716,17 @@ function focusDesktopWindow(key: string) {
   item.window.focus();
   refreshTaskStrip();
 }
+// Keep the window frame and its dock button showing the current folder.
+// Called on every navigation, so it no-ops when the title is unchanged.
+function retitleExplorer(view: ExplorerView) {
+  const item = desktopWindows.get(view.key);
+  if (!item) return;
+  const title = explorerWindowTitle(view);
+  if (item.title === title) return;
+  item.title = title;
+  item.window.setTitle(title);
+  refreshTaskStrip();
+}
 function desktopEnabled() {
   return Boolean(window.WinBox) && document.body.classList.contains("windowed");
 }
@@ -723,10 +747,11 @@ async function openExplorerWindow(
   document.body.classList.add("windowed");
   const number = ++explorerSequence;
   const key = `explorer:${number}`;
-  const explorerName = number === 1 ? "Explorer" : `Explorer ${number}`;
-  const title = peer
-    ? `${peer.glyph} ${explorerName}`
-    : hostWindowTitle(explorerName);
+  // The window frame exists before its first listing resolves, so it opens
+  // with the owning host's glyph alone; navigate() retitles it to the
+  // current folder as soon as roots and the listing land. This placeholder
+  // is only visible during that first load, or if the load fails.
+  const title = `${peer ? peer.glyph : localHost.glyph} …`;
   const panel = createExplorerPanel();
   const view = createExplorerView(key, panel);
   view.state.peer = peer;
@@ -956,6 +981,9 @@ async function navigate(view: ExplorerView, path = "") {
     '<div class="empty"><sl-spinner></sl-spinner></div>';
   renderBreadcrumbs(view);
   renderTabStrip(view);
+  // Retitle before the fetch: the title reflects the folder being opened,
+  // so a failed listing still names the folder the user asked for.
+  retitleExplorer(view);
   iconify();
   try {
     const result = await api(

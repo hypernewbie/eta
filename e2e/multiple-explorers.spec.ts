@@ -11,7 +11,9 @@ test("launcher opens independently navigable Explorer windows", async ({
   await page.locator("#eta-launcher").click();
   await page.locator('[data-location="local"]').click();
   await expect(explorers).toHaveCount(2);
-  await expect(page.locator("#task-strip")).toContainText("Explorer 2");
+  await expect(
+    page.locator('#task-strip .task-window[data-window^="explorer:"]'),
+  ).toHaveCount(2);
 
   const first = explorers.nth(0);
   const second = explorers.nth(1);
@@ -23,6 +25,10 @@ test("launcher opens independently navigable Explorer windows", async ({
   await expect(second.locator('[data-explorer="breadcrumbs"]')).toContainText(
     folderName,
   );
+  // The window title and its dock button name the folder being shown, so
+  // navigating one Explorer retitles that window and not its sibling.
+  await expect(second.locator(".wb-title")).toContainText(folderName);
+  await expect(page.locator("#task-strip")).toContainText(folderName);
   await expect(
     first.locator('[data-explorer="breadcrumbs"]'),
   ).not.toContainText(folderName);

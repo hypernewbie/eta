@@ -21,7 +21,7 @@ async function waitForPeer() {
   throw new Error("peer Eta instance did not start");
 }
 
-test("enrolled peer opens as a source-aware remote Explorer", async ({
+test("enrolled peer opens as a source-aware remote Explorer @peer", async ({
   page,
   request,
 }) => {
@@ -89,10 +89,10 @@ test("enrolled peer opens as a source-aware remote Explorer", async ({
     await remoteTerminal.locator(".wb-close").click({ force: true });
 
     const localExplorer = page.locator(".winbox.eta-window:not(.peer-window)").last();
-    await page.locator("#task-strip .task-button").filter({ hasText: "Explorer" }).first().click();
+    await page.locator('#task-strip .task-window[data-window^="explorer:"]').first().click();
     await localExplorer.getByText("README.md", { exact: true }).click({ button: "right" });
     await page.locator('[data-file-action="copy"]').click();
-    await page.locator("#task-strip .task-button").filter({ hasText: "Explorer" }).last().click();
+    await page.locator('#task-strip .task-window[data-window^="explorer:"]').last().click();
     await remoteExplorer.getByText("destination", { exact: true }).click({ button: "right" });
     await page.locator('[data-file-action="paste"]').click();
     const copyTask = page.locator(".copy-task");
