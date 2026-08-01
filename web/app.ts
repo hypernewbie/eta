@@ -466,7 +466,7 @@ async function loadLocalHost() {
   const identity = (await api("/api/identity")) as HostIdentity;
   localHost = identity;
   setTheme(identity.accent, false);
-  $("#hostname-display").textContent = identity.hostname;
+  $("#hostname-display").textContent = identity.hostname.toUpperCase();
 }
 function iconify() {
   window.lucide?.createIcons({ attrs: { "stroke-width": 1.65 } });
