@@ -420,6 +420,17 @@ async function api(path, init) {
 function showToast(message, variant = "danger") {
     const alert = $("#error-toast");
     alert.variant = variant;
+    // The icon was fixed at circle-alert, so a success read as a warning
+    // wearing a green border.
+    const icon = alert.querySelector('[slot="icon"]');
+    if (icon) {
+        icon.outerHTML = `<i slot="icon" data-lucide="${variant === "success"
+            ? "check-circle"
+            : variant === "danger"
+                ? "circle-alert"
+                : "info"}"></i>`;
+        iconify();
+    }
     $("#error-message").textContent = message;
     alert.toast();
 }

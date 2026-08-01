@@ -424,6 +424,58 @@ svg.file-type-icon {
   flex: 0 0 auto;
   color: var(--text-muted);
 }
+/* The toast was stock Shoelace: a white-ish card with the library's own
+   red and green, matching nothing else on screen. It is eta's surface
+   now, and a success is confirmed in the machine's identity accent —
+   the same colour as the window it happened in. */
+#error-toast::part(base) {
+  border: 1px solid color-mix(in srgb, var(--identity-accent) 30%, transparent);
+  border-top: none;
+  border-radius: 10px;
+  background: linear-gradient(rgba(22, 22, 30, 0.86), rgba(10, 10, 14, 0.92));
+  box-shadow:
+    0 18px 44px rgba(0, 0, 0, 0.55),
+    0 0 32px color-mix(in srgb, var(--identity-accent) 18%, transparent),
+    inset 0 1px 0 rgba(255, 255, 255, 0.07);
+  backdrop-filter: blur(22px) saturate(170%);
+  -webkit-backdrop-filter: blur(22px) saturate(170%);
+  color: var(--text-primary);
+  font-size: 12px;
+  font-family: var(--font-mono);
+}
+#error-toast::part(message) {
+  padding: 12px 14px;
+  line-height: 1.4;
+}
+#error-toast::part(icon) {
+  padding-left: 14px;
+  color: var(--identity-accent);
+}
+#error-toast::part(icon) svg {
+  width: 16px;
+  height: 16px;
+}
+#error-toast::part(close-button) {
+  color: var(--text-dim);
+}
+#error-toast[variant="success"]::part(base) {
+  border-color: color-mix(in srgb, var(--identity-accent) 48%, transparent);
+  box-shadow:
+    0 18px 44px rgba(0, 0, 0, 0.55),
+    0 0 38px color-mix(in srgb, var(--identity-accent) 26%, transparent),
+    inset 0 1px 0 rgba(255, 255, 255, 0.07);
+}
+/* A failure is the one thing that should not wear the host colour. */
+#error-toast[variant="danger"]::part(base) {
+  border-color: color-mix(in srgb, var(--danger, #ef6b73) 42%, transparent);
+  box-shadow:
+    0 18px 44px rgba(0, 0, 0, 0.55),
+    0 0 32px color-mix(in srgb, var(--danger, #ef6b73) 20%, transparent),
+    inset 0 1px 0 rgba(255, 255, 255, 0.07);
+}
+#error-toast[variant="danger"]::part(icon) {
+  color: var(--danger, #ef6b73);
+}
 .preview-dialog {
   --width: min(1440px, calc(100vw - 32px));
 }
