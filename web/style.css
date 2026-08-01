@@ -1005,22 +1005,28 @@ svg.file-type-icon {
   /* At 0.97 alpha the old panel was effectively opaque, so the blur
      behind it did nothing and it read as a grey box. Real glass wants a
      surface light enough to see through, held up by a strong blur and a
-     lit edge rather than by opacity. */
+     lit edge rather than by opacity.
+
+     The panel itself is kept almost neutral on purpose. This is a list
+     of computers, each in its own colour, and the whole point is to
+     tell them apart — a frame washed in the host's accent competes
+     with the six colours inside it and makes the local machine look
+     like the subject. The chrome is a surface; the colour belongs to
+     the rows. */
   overflow: hidden;
-  border: 1px solid color-mix(in srgb, var(--identity-accent) 24%, transparent);
+  border: 1px solid var(--bg-border);
   border-radius: 12px;
   background:
     linear-gradient(
       165deg,
-      color-mix(in srgb, var(--identity-accent) 12%, transparent),
-      transparent 42%
+      color-mix(in srgb, var(--identity-accent) 4%, transparent),
+      transparent 38%
     ),
-    linear-gradient(rgba(22, 22, 30, 0.72), rgba(10, 10, 14, 0.82));
+    linear-gradient(rgba(22, 22, 30, 0.74), rgba(10, 10, 14, 0.84));
   box-shadow:
-    0 24px 60px rgba(0, 0, 0, 0.62),
-    0 0 42px color-mix(in srgb, var(--identity-accent) 22%, transparent),
-    inset 0 1px 0 rgba(255, 255, 255, 0.09),
-    inset 0 0 0 1px rgba(255, 255, 255, 0.03);
+    0 20px 52px rgba(0, 0, 0, 0.6),
+    inset 0 1px 0 rgba(255, 255, 255, 0.07),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.025);
   backdrop-filter: blur(26px) saturate(180%);
   -webkit-backdrop-filter: blur(26px) saturate(180%);
   transform-origin: bottom left;
@@ -1037,8 +1043,8 @@ svg.file-type-icon {
     transform: translateY(0) scale(1);
   }
 }
-/* A specular sweep across the top edge, so the surface catches light
-   instead of being a flat tint. */
+/* A neutral specular sweep across the top edge, so the surface catches
+   light without tinting it. */
 .eta-menu::before {
   content: "";
   position: absolute;
@@ -1049,7 +1055,7 @@ svg.file-type-icon {
   height: 42%;
   background: linear-gradient(
     to bottom,
-    rgba(255, 255, 255, 0.07),
+    rgba(255, 255, 255, 0.05),
     transparent
   );
   pointer-events: none;
@@ -1097,8 +1103,8 @@ svg.file-type-icon {
 .eta-location:focus-visible {
   background: linear-gradient(
     90deg,
-    color-mix(in srgb, var(--pc-accent, var(--text-primary)) 22%, transparent),
-    transparent 88%
+    color-mix(in srgb, var(--pc-accent, var(--text-primary)) 18%, transparent),
+    transparent 86%
   );
   box-shadow: inset 2px 0 0 var(--pc-accent, var(--text-primary));
   outline: 0;
