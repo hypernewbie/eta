@@ -996,24 +996,59 @@ async function openTerminal(view: ExplorerView, entry: Entry) {
   }
   let offset = 0;
   let stopped = false;
-  const refresh = async () => {
-    if (stopped) return;
-    try {
-      const result = await api(
-        terminalURL(view, created.id, "", { offset: String(offset) }),
-      );
-      if (result.output) xterm?.write(result.output);
-      offset = result.offset;
-      if (result.closed) {
-        stopped = true;
-        return;
+  const streamOutput = async () => {
+    let backoffMs = 100;
+    const base = window.location.origin || "";
+    while (!stopped) {
+      try {
+        const response = await fetch(
+          `${base}/api/terminals/${encodeURIComponent(created.id)}/stream?offset=${offset}`,
+          { headers: { Accept: "text/event-stream" } },
+        );
+        if (!response.body || !response.ok) {
+          throw new Error(`stream: ${response.status}`);
+        }
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+        backoffMs = 100;
+        while (!stopped) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          let sep = buffer.indexOf("\n\n");
+          while (sep !== -1) {
+            const event = buffer.slice(0, sep);
+            buffer = buffer.slice(sep + 2);
+            for (const line of event.split("\n")) {
+              if (!line.startsWith("data:")) continue;
+              const payload = line.slice(5).trim();
+              if (!payload) continue;
+              let parsed: { output?: string; offset?: number; closed?: boolean };
+              try {
+                parsed = JSON.parse(payload);
+              } catch {
+                continue;
+              }
+              if (parsed.output && xterm) xterm.write(parsed.output);
+              if (typeof parsed.offset === "number") offset = parsed.offset;
+              if (parsed.closed) {
+                stopped = true;
+                return;
+              }
+            }
+            sep = buffer.indexOf("\n\n");
+          }
+        }
+      } catch {
+        if (stopped) return;
+        // Reconnect with exponential backoff. Reset on success.
+        await new Promise((r) => window.setTimeout(r, backoffMs));
+        backoffMs = Math.min(backoffMs * 2, 5000);
       }
-    } catch {
-      stopped = true;
-      return;
     }
-    window.setTimeout(refresh, 180);
   };
+  void streamOutput();
   const sendResize = () => {
     if (!xterm || stopped) return;
     fit?.fit();
@@ -1084,7 +1119,7 @@ async function openTerminal(view: ExplorerView, entry: Entry) {
   terminal.focus();
   sendResize();
   xterm?.focus();
-  void refresh();
+  void streamOutput();
 }
 
 async function openInspector(

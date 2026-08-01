@@ -290,6 +290,7 @@ func (s *server) routes() http.Handler {
 	mux.HandleFunc("GET /api/peers", s.handlePeers)
 	mux.HandleFunc("POST /api/terminals", s.handleTerminalStart)
 	mux.HandleFunc("GET /api/terminals/{id}", s.handleTerminalOutput)
+	mux.HandleFunc("GET /api/terminals/{id}/stream", s.handleTerminalStream)
 	mux.HandleFunc("POST /api/terminals/{id}/input", s.handleTerminalInput)
 	mux.HandleFunc("POST /api/terminals/{id}/resize", s.handleTerminalResize)
 	mux.HandleFunc("DELETE /api/terminals/{id}", s.handleTerminalClose)
@@ -406,6 +407,64 @@ func (s *server) handleTerminalOutput(w http.ResponseWriter, r *http.Request) {
 		output, next, closed := session.Output(offset)
 		writeJSON(w, http.StatusOK, map[string]any{"output": string(output), "offset": next, "closed": closed})
 	})
+}
+
+// handleTerminalStream streams PTY output as text/event-stream,
+// reducing end-to-end output latency from the 180 ms client-polling
+// window to ~20 ms. Each event carries the new bytes since the last
+// offset plus the new offset; the final event has `closed: true`.
+// Clients (re)connect with `?offset=N` and reconnect transparently
+// across disconnects.
+func (s *server) handleTerminalStream(w http.ResponseWriter, r *http.Request) {
+	if s.terminals == nil {
+		writeError(w, errors.New("terminal service is unavailable"))
+		return
+	}
+	session, ok := s.terminals.Get(r.PathValue("id"))
+	if !ok {
+		http.Error(w, "unknown terminal", http.StatusNotFound)
+		return
+	}
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		// Streaming requires a flushable response writer; fall back
+		// to polling on the existing endpoint rather than half-streaming.
+		s.terminalSession(w, r, func(sess *terminal.Session) {
+			offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
+			output, next, closed := sess.Output(offset)
+			writeJSON(w, http.StatusOK, map[string]any{"output": string(output), "offset": next, "closed": closed})
+		})
+		return
+	}
+	offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Accel-Buffering", "no")
+	flusher.Flush()
+
+	ticker := time.NewTicker(20 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-r.Context().Done():
+			return
+		case <-ticker.C:
+		}
+		output, next, closed := session.Output(offset)
+		if len(output) > 0 {
+			body, _ := json.Marshal(map[string]any{"output": string(output), "offset": next, "closed": closed})
+			fmt.Fprintf(w, "data: %s\n\n", body)
+			flusher.Flush()
+			offset = next
+		}
+		if closed {
+			body, _ := json.Marshal(map[string]any{"closed": true, "offset": offset})
+			fmt.Fprintf(w, "data: %s\n\n", body)
+			flusher.Flush()
+			return
+		}
+	}
 }
 func (s *server) handleTerminalInput(w http.ResponseWriter, r *http.Request) {
 	s.terminalSession(w, r, func(session *terminal.Session) {
