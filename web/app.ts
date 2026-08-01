@@ -727,6 +727,20 @@ function retitleExplorer(view: ExplorerView) {
   item.window.setTitle(title);
   refreshTaskStrip();
 }
+// Taskbar semantics: clicking the button of the window you are already in
+// minimizes it, clicking any other button restores and focuses it. Without
+// this the dock can only ever raise a window, and since a minimized window
+// is hidden entirely there would be no way to put one away from the dock.
+function toggleDesktopWindow(key: string) {
+  const item = desktopWindows.get(key);
+  if (!item) return;
+  if (!item.window.min && key === activeWindowKey) {
+    item.window.minimize();
+    refreshTaskStrip();
+    return;
+  }
+  focusDesktopWindow(key);
+}
 function desktopEnabled() {
   return Boolean(window.WinBox) && document.body.classList.contains("windowed");
 }
@@ -1953,7 +1967,7 @@ $("#task-strip").addEventListener("click", (event) => {
     "[data-window]",
   ) as HTMLElement | null;
   if (button) {
-    focusDesktopWindow(button.dataset.window || "");
+    toggleDesktopWindow(button.dataset.window || "");
     return;
   }
 });

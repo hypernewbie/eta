@@ -1152,6 +1152,14 @@ iconify-icon.entry-icon {
   opacity: 1;
   background-color: var(--accent-wash);
 }
+/* A minimized window leaves the desktop entirely; its dock button is its
+   only representation, the way a taskbar button is the window in Windows.
+   WinBox otherwise only hides .wb-body and leaves the header parked as a
+   stub at the bottom of the viewport, which lands just above Eta's own
+   taskbar and reads as a second, half-broken taskbar. */
+.winbox.min {
+  display: none;
+}
 .wb-body {
   background:
     radial-gradient(ellipse at 50% 0%, var(--accent-trace), transparent 44%),
