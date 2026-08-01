@@ -869,6 +869,13 @@ svg.file-type-icon {
   font: 11px var(--font-mono);
   text-align: left;
 }
+/* A class selector setting display outranks the UA's [hidden] rule, so
+   every item app.ts tried to hide stayed visible: "Open HTML trusted"
+   on every file, plus copy/cut/paste/terminal in contexts that do not
+   support them. The gating was always correct; this lets it apply. */
+.file-context-menu button[hidden] {
+  display: none;
+}
 .file-context-menu button:hover {
   background: var(--accent-wash);
 }
