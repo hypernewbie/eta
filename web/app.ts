@@ -255,6 +255,68 @@ let contextEntry: ExplorerEntry | null = null;
 // transport is selected only when a paste crosses to an enrolled peer.
 let explorerClipboard: ExplorerEntry | null = null;
 let explorerClipboardOperation: "copy" | "cut" = "copy";
+
+// ClipboardDescriptor is the persisted shape of the explorer clipboard.
+// Held in localStorage so the source intent (host, root, path,
+// operation) survives a page reload. drag/drop carries a snapshot via
+// the same shape in dataTransfer; Paste from a folder drop reads it
+// and routes through the same planner as Paste from the context menu.
+interface ClipboardDescriptor {
+  host: string;
+  root: number;
+  path: string;
+  operation: "copy" | "cut";
+}
+const CLIPBOARD_MIME = "application/x-eta-clipboard";
+const CLIPBOARD_STORAGE_KEY = "eta.clipboard";
+function saveClipboard(): void {
+  if (!explorerClipboard) {
+    localStorage.removeItem(CLIPBOARD_STORAGE_KEY);
+    return;
+  }
+  const descriptor: ClipboardDescriptor = {
+    host: explorerClipboard.view.state.peer?.url ?? "local",
+    root: explorerClipboard.view.state.root,
+    path: explorerClipboard.entry.path,
+    operation: explorerClipboardOperation,
+  };
+  localStorage.setItem(CLIPBOARD_STORAGE_KEY, JSON.stringify(descriptor));
+}
+function clearClipboard(): void {
+  explorerClipboard = null;
+  explorerClipboardOperation = "copy";
+  localStorage.removeItem(CLIPBOARD_STORAGE_KEY);
+}
+function loadClipboardDescriptor(): ClipboardDescriptor | null {
+  try {
+    const raw = localStorage.getItem(CLIPBOARD_STORAGE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Partial<ClipboardDescriptor>;
+    if (
+      !parsed ||
+      typeof parsed.host !== "string" ||
+      typeof parsed.root !== "number" ||
+      typeof parsed.path !== "string" ||
+      (parsed.operation !== "copy" && parsed.operation !== "cut")
+    ) {
+      return null;
+    }
+    return parsed as ClipboardDescriptor;
+  } catch {
+    return null;
+  }
+}
+function buildDescriptorFromEntry(
+  source: ExplorerEntry,
+  operation: "copy" | "cut",
+): ClipboardDescriptor {
+  return {
+    host: source.view.state.peer?.url ?? "local",
+    root: source.view.state.root,
+    path: source.entry.path,
+    operation,
+  };
+}
 let explorerSequence = 0;
 let localHost: HostIdentity = {
   id: "local",
@@ -1169,6 +1231,71 @@ function bindExplorer(view: ExplorerView) {
     ) as HTMLElement | null;
     if (button) navigate(view, button.dataset.path);
   });
+  view.element("entries").addEventListener("dragstart", (event) => {
+    const row = (event.target as HTMLElement).closest(
+      ".entry",
+    ) as HTMLElement | null;
+    if (!row || row.dataset.parent) return;
+    const source: ExplorerEntry = {
+      view,
+      entry: {
+        path: row.dataset.path || "",
+        name:
+          row.querySelector(".entry-name, .grid-name")?.textContent || "",
+        kind: row.dataset.kind as Entry["kind"],
+        size: Number(row.dataset.size),
+        modified: row.dataset.modified || "",
+      },
+    };
+    explorerClipboard = source;
+    explorerClipboardOperation = "copy";
+    saveClipboard();
+    if (event.dataTransfer) {
+      event.dataTransfer.effectAllowed = "copy";
+      event.dataTransfer.setData(
+        CLIPBOARD_MIME,
+        JSON.stringify(buildDescriptorFromEntry(source, "copy")),
+      );
+    }
+  });
+
+  view.element("entries").addEventListener("dragover", (event) => {
+    const row = (event.target as HTMLElement).closest(
+      ".entry",
+    ) as HTMLElement | null;
+    // Only directories are valid paste targets; the entries container
+    // itself accepts nothing.
+    if (!row || row.dataset.kind !== "directory" || row.dataset.parent) return;
+    event.preventDefault();
+    if (event.dataTransfer) event.dataTransfer.dropEffect = "copy";
+  });
+
+  view.element("entries").addEventListener("drop", async (event) => {
+    const row = (event.target as HTMLElement).closest(
+      ".entry",
+    ) as HTMLElement | null;
+    if (!row || row.dataset.kind !== "directory" || row.dataset.parent) return;
+    event.preventDefault();
+    const payload = event.dataTransfer?.getData(CLIPBOARD_MIME);
+    if (!payload) return;
+    // explorerClipboard is already set by the dragstart handler; if the
+    // drag originated from a different document (uncommon), fall back
+    // to nothing rather than guessing at the source.
+    if (!explorerClipboard) return;
+    const destination: ExplorerEntry = {
+      view,
+      entry: {
+        path: row.dataset.path || "",
+        name:
+          row.querySelector(".entry-name, .grid-name")?.textContent || "",
+        kind: row.dataset.kind as Entry["kind"],
+        size: Number(row.dataset.size),
+        modified: row.dataset.modified || "",
+      },
+    };
+    await pasteIntoFolder(destination);
+  });
+
   view.element("entries").addEventListener("contextmenu", (event) => {
     const row = (event.target as HTMLElement).closest(
       ".entry",
@@ -1366,6 +1493,7 @@ async function completeCut(source: ExplorerEntry) {
     });
   }
   explorerClipboard = null;
+  localStorage.removeItem(CLIPBOARD_STORAGE_KEY);
   await navigate(source.view, source.view.state.path);
 }
 
@@ -1524,6 +1652,7 @@ $("#file-context-menu").addEventListener("click", async (event) => {
     ) {
       explorerClipboard = target;
       explorerClipboardOperation = action.dataset.fileAction;
+      saveClipboard();
       showToast(
         `${explorerClipboardOperation === "cut" ? "Cut" : "Copied"} ${target.entry.name} to clipboard`,
       );

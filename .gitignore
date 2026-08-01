@@ -20,3 +20,4 @@ playwright-report/
 blob-report/
 *.tsbuildinfo
 .pi-subagents/
+playwright.config.local.ts

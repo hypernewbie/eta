@@ -3,24 +3,36 @@
 // test cannot poison assertions about explorer counts, paths, or active
 // windows.
 //
-// The previous test's browser context fires a `pagehide` sendBeacon
-// to /api/state at teardown, and that save races with a naive rmSync
-// here. Putting empty state through the API right before each test is
-// a synchronous overwrite: the call awaits the server response, so by
-// the time the test's page.goto("/") fires the state on disk is empty.
-// handleStateGet re-reads from disk on every call, so the long-lived
-// webserver fixture picks up the empty state without a restart.
+// Inter-test state cleanup runs in two layers:
+//
+//   1. beforeEach: PUTs empty state to /api/state via the request
+//      fixture, then rmSyncs the on-disk file. The PUT is synchronous
+//      (await the response), so by the time the test body runs the
+//      server's state file is empty.
+//
+//   2. An addInitScript that neuters `navigator.sendBeacon` for the
+//      rest of the page's lifetime. The webapp's pagehide handler
+//      (web/app.ts) calls sendBeacon to persist desktop state when
+//      the tab closes — without this, the previous test's pagehide
+//      beacon can land on the server AFTER beforeEach's PUT fired
+//      and pin the next test's Explorer at a stale path. Tests do
+//      their own state writes through /api/state via the request
+//      fixture, so no real persistence is lost.
 import { test as base, expect } from "@playwright/test";
 import { rmSync } from "node:fs";
 
 export const test = base.extend({});
 
-test.beforeEach(async ({ request }) => {
+test.beforeEach(async ({ page, request }) => {
+  await page.addInitScript(() => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    navigator.sendBeacon = () => true;
+  });
   await request
     .put("/api/state", { data: { version: 1, windows: [] } })
     .catch(() => {
-      // First test in a fresh run can race the server boot. The
-      // test will fail more informatively at its first goto if so.
+      // If the server isn't reachable yet the first test in a fresh
+      // run will fail more informatively at its first goto.
     });
   rmSync("test-results/state.json", { force: true });
 });
