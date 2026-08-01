@@ -795,6 +795,27 @@ function animateWindowToDock(
     },
   );
 }
+// WinBox's own minimize button calls minimize() directly, which hides
+// the window instantly and skips the animation the dock button plays.
+// Intercepting in the capture phase — before WinBox's own handler on
+// the button — routes both paths through the same code, so a window
+// leaves the same way however you sent it away.
+document.addEventListener(
+  "click",
+  (event) => {
+    const button = (event.target as HTMLElement)?.closest?.(".wb-min");
+    if (!button) return;
+    const frame = button.closest(".winbox");
+    const entry = [...desktopWindows.entries()].find(
+      ([, item]) => item.window.window === frame,
+    );
+    if (!entry) return;
+    event.preventDefault();
+    event.stopPropagation();
+    minimizeDesktopWindow(entry[0]);
+  },
+  true,
+);
 function minimizeDesktopWindow(key: string) {
   const item = desktopWindows.get(key);
   if (!item) return;
