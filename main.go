@@ -35,6 +35,7 @@ import (
 	"github.com/hypernewbie/eta/internal/rangecache"
 	"github.com/hypernewbie/eta/internal/remotefile"
 	"github.com/hypernewbie/eta/internal/terminal"
+	"github.com/hypernewbie/eta/internal/tmux"
 	"github.com/hypernewbie/eta/internal/transfer"
 	"github.com/hypernewbie/eta/internal/uistate"
 )
@@ -333,6 +334,10 @@ func (s *server) routes() http.Handler {
 	mux.HandleFunc("POST /api/terminals/{id}/input", s.handleTerminalInput)
 	mux.HandleFunc("POST /api/terminals/{id}/resize", s.handleTerminalResize)
 	mux.HandleFunc("DELETE /api/terminals/{id}", s.handleTerminalClose)
+	mux.HandleFunc("GET /api/tmux", s.handleTmuxList)
+	mux.HandleFunc("POST /api/tmux", s.handleTmuxCreate)
+	mux.HandleFunc("GET /api/remote/tmux", s.handleRemoteTmuxList)
+	mux.HandleFunc("POST /api/remote/tmux", s.handleRemoteTmuxCreate)
 	mux.HandleFunc("POST /api/remote/terminals", s.handleRemoteTerminalStart)
 	mux.HandleFunc("GET /api/remote/terminals/{id}", s.handleRemoteTerminalOutput)
 	mux.HandleFunc("GET /api/remote/terminals/{id}/stream", s.handleRemoteTerminalStream)
@@ -446,6 +451,46 @@ func (s *server) handleStatePut(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
+// The list reports availability rather than failing, so the UI can say
+// "tmux is not installed on this PC" instead of showing a machine with
+// no sessions and no explanation.
+func (s *server) handleTmuxList(w http.ResponseWriter, r *http.Request) {
+	sessions, err := tmux.List(r.Context())
+	if errors.Is(err, tmux.ErrUnavailable) {
+		writeJSON(w, http.StatusOK, map[string]any{"available": false, "sessions": []tmux.Session{}})
+		return
+	}
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"available": true, "sessions": sessions})
+}
+
+func (s *server) handleTmuxCreate(w http.ResponseWriter, r *http.Request) {
+	var request struct {
+		Name string `json:"name"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4<<10)).Decode(&request); err != nil {
+		writeError(w, err)
+		return
+	}
+	session, err := tmux.Create(r.Context(), request.Name)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, session)
+}
+
+func (s *server) handleRemoteTmuxList(w http.ResponseWriter, r *http.Request) {
+	s.proxyRemoteTerminal(w, r, "/api/tmux")
+}
+
+func (s *server) handleRemoteTmuxCreate(w http.ResponseWriter, r *http.Request) {
+	s.proxyRemoteTerminal(w, r, "/api/tmux")
+}
+
 func (s *server) handleTerminalStart(w http.ResponseWriter, r *http.Request) {
 	if s.terminals == nil {
 		writeError(w, errors.New("terminal service is unavailable"))
@@ -456,6 +501,7 @@ func (s *server) handleTerminalStart(w http.ResponseWriter, r *http.Request) {
 		Path    string `json:"path"`
 		Columns uint16 `json:"columns"`
 		Rows    uint16 `json:"rows"`
+		Tmux    string `json:"tmux"`
 	}
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&request); err != nil {
 		writeError(w, err)
@@ -473,7 +519,17 @@ func (s *server) handleTerminalStart(w http.ResponseWriter, r *http.Request) {
 	} else if !info.IsDir() {
 		target = filepath.Dir(target)
 	}
-	id, err := s.terminals.Start(target, request.Columns, request.Rows)
+	start := func() (string, error) {
+		if request.Tmux == "" {
+			return s.terminals.Start(target, request.Columns, request.Rows)
+		}
+		argv, err := tmux.AttachArgv(request.Tmux)
+		if err != nil {
+			return "", err
+		}
+		return s.terminals.StartCommand(target, request.Columns, request.Rows, argv)
+	}
+	id, err := start()
 	if err != nil {
 		writeError(w, err)
 		return

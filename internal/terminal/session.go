@@ -28,18 +28,31 @@ type Session struct {
 }
 
 func NewManager() *Manager { return &Manager{sessions: map[string]*Session{}} }
+
+// Start runs the user's login shell.
 func (m *Manager) Start(directory string, columns, rows uint16) (string, error) {
+	shell := os.Getenv("SHELL")
+	if shell == "" {
+		shell = "/bin/sh"
+	}
+	return m.StartCommand(directory, columns, rows, []string{shell})
+}
+
+// StartCommand runs an explicit argv instead of the shell, which is how
+// a terminal lands directly inside a tmux session. argv is passed to
+// exec as separate arguments and never through a shell, so a session
+// name cannot become a command.
+func (m *Manager) StartCommand(directory string, columns, rows uint16, argv []string) (string, error) {
+	if len(argv) == 0 {
+		return "", errors.New("no command to run")
+	}
 	if columns == 0 {
 		columns = 120
 	}
 	if rows == 0 {
 		rows = 36
 	}
-	shell := os.Getenv("SHELL")
-	if shell == "" {
-		shell = "/bin/sh"
-	}
-	cmd := exec.Command(shell)
+	cmd := exec.Command(argv[0], argv[1:]...)
 	cmd.Dir = directory
 	cmd.Env = append(os.Environ(), "TERM=xterm-256color")
 	file, err := pty.StartWithSize(cmd, &pty.Winsize{Cols: columns, Rows: rows})

@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -17,6 +18,7 @@ import (
 	"github.com/hypernewbie/eta/internal/diskcache"
 	"github.com/hypernewbie/eta/internal/peers"
 	"github.com/hypernewbie/eta/internal/terminal"
+	"github.com/hypernewbie/eta/internal/tmux"
 	"github.com/hypernewbie/eta/internal/transfer"
 	"github.com/hypernewbie/eta/internal/uistate"
 )
@@ -679,5 +681,48 @@ func TestListingMarksDotfilesHidden(t *testing.T) {
 		if item.Hidden != want {
 			t.Errorf("%q hidden = %v, want %v", item.Name, item.Hidden, want)
 		}
+	}
+}
+
+// A machine without tmux must answer "not available" rather than an
+// error or an empty session list, so the UI can tell "nothing running"
+// apart from "cannot ask".
+func TestTmuxListReportsAvailability(t *testing.T) {
+	server, err := newServer([]string{t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := httptest.NewRecorder()
+	server.routes().ServeHTTP(response, httptest.NewRequest("GET", "/api/tmux", nil))
+	if response.Code != http.StatusOK {
+		t.Fatalf("tmux list=%d %s", response.Code, response.Body.String())
+	}
+	var body struct {
+		Available bool           `json:"available"`
+		Sessions  []tmux.Session `json:"sessions"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if body.Sessions == nil {
+		t.Error("sessions must be an empty list, never null")
+	}
+	if _, err := exec.LookPath("tmux"); err != nil && body.Available {
+		t.Error("reported tmux as available on a machine without it")
+	}
+}
+
+// Session names reach a command line; the endpoint must refuse the
+// unsafe ones rather than relying on the caller.
+func TestTmuxCreateRejectsUnsafeName(t *testing.T) {
+	server, err := newServer([]string{t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := httptest.NewRecorder()
+	server.routes().ServeHTTP(response, httptest.NewRequest("POST", "/api/tmux",
+		bytes.NewBufferString(`{"name":"evil; rm -rf /"}`)))
+	if response.Code == http.StatusCreated {
+		t.Fatalf("unsafe session name accepted: %s", response.Body.String())
 	}
 }

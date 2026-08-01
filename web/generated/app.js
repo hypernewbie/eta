@@ -365,13 +365,16 @@ function sourceURL(view, endpoint, params) {
     return `${view.state.peer ? "/api/remote" : "/api"}/${endpoint}?${query}`;
 }
 function terminalURL(view, id = "", action = "", params = {}) {
+    return terminalURLFor(view.state.peer, id, action, params);
+}
+function terminalURLFor(peer, id = "", action = "", params = {}) {
     const query = new URLSearchParams(params);
-    if (view.state.peer)
-        query.set("peer", view.state.peer.url);
+    if (peer)
+        query.set("peer", peer.url);
     const suffix = id
         ? `/${encodeURIComponent(id)}${action ? `/${action}` : ""}`
         : "";
-    return `${view.state.peer ? "/api/remote" : "/api"}/terminals${suffix}?${query}`;
+    return `${peer ? "/api/remote" : "/api"}/terminals${suffix}?${query}`;
 }
 function fileURL(view, path, download = false) {
     return sourceURL(view, "file", {
@@ -1065,6 +1068,14 @@ facts = true) {
     return { rawText, binary };
 }
 async function openTerminal(view, entry) {
+    return openTerminalWindow({
+        peer: view.state.peer,
+        root: view.state.root,
+        path: entry.path,
+        label: entry.name,
+    });
+}
+async function openTerminalWindow(target) {
     // xterm measures the font once, when it is constructed, and caches the
     // cell size from that. Constructed before the webfont arrives it locks
     // in fallback metrics for the life of the terminal, which is what made
@@ -1076,20 +1087,27 @@ async function openTerminal(view, entry) {
         // A missing font is a cosmetic problem, never a reason not to open
         // a terminal.
     }
-    const created = await api(sourceURL(view, "terminals", {}), {
+    const query = new URLSearchParams();
+    if (target.peer)
+        query.set("peer", target.peer.url);
+    const created = await api(`${target.peer ? "/api/remote" : "/api"}/terminals?${query}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-            root: view.state.root,
-            path: entry.path,
+            root: target.root,
+            path: target.path,
             columns: 120,
             rows: 32,
+            ...(target.tmux ? { tmux: target.tmux } : {}),
         }),
     });
     const key = `terminal:${created.id}`;
-    const title = view.state.peer
-        ? `${view.state.peer.glyph} Terminal — ${entry.name}`
-        : hostWindowTitle(`Terminal — ${entry.name}`);
+    const label = target.tmux
+        ? `tmux — ${target.tmux}`
+        : `Terminal — ${target.label}`;
+    const title = target.peer
+        ? `${target.peer.glyph} ${label}`
+        : hostWindowTitle(label);
     const panel = document.createElement("section");
     panel.className = "terminal-panel";
     const terminalHost = document.createElement("div");
@@ -1133,7 +1151,7 @@ async function openTerminal(view, entry) {
                 // already routed correctly, so a remote terminal accepted
                 // keystrokes and never showed a byte of output.
                 const response = await fetch(base +
-                    terminalURL(view, created.id, "stream", {
+                    terminalURLFor(target.peer, created.id, "stream", {
                         offset: String(offset),
                     }), { headers: { Accept: "text/event-stream" } });
                 if (!response.body || !response.ok) {
@@ -1204,7 +1222,7 @@ async function openTerminal(view, entry) {
         if (!xterm || stopped)
             return;
         fit?.fit();
-        void api(terminalURL(view, created.id, "resize"), {
+        void api(terminalURLFor(target.peer, created.id, "resize"), {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ columns: xterm.cols, rows: xterm.rows }),
@@ -1213,7 +1231,7 @@ async function openTerminal(view, entry) {
     xterm?.onData((input) => {
         if (stopped)
             return;
-        void api(terminalURL(view, created.id, "input"), {
+        void api(terminalURLFor(target.peer, created.id, "input"), {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ input }),
@@ -1224,7 +1242,7 @@ async function openTerminal(view, entry) {
     const terminal = new window.WinBox({
         title,
         mount: panel,
-        class: view.state.peer
+        class: target.peer
             ? "eta-window identity-window peer-window"
             : "eta-window identity-window",
         x: "center",
@@ -1249,23 +1267,23 @@ async function openTerminal(view, entry) {
                 activeWindowKey = null;
             refreshTaskStrip();
             flushDesktopSave();
-            void api(terminalURL(view, created.id), {
+            void api(terminalURLFor(target.peer, created.id), {
                 method: "DELETE",
             });
         },
     });
-    colorWindow(terminal, view.state.peer);
+    colorWindow(terminal, target.peer);
     desktopWindows.set(key, {
         title,
         kind: "terminal",
-        peer: view.state.peer,
+        peer: target.peer,
         persist: false,
         window: terminal,
         state: () => ({
             kind: "file",
-            root: view.state.root,
-            path: entry.path,
-            peer: view.state.peer?.url,
+            root: target.root,
+            path: target.path,
+            peer: target.peer?.url,
         }),
     });
     activeWindowKey = key;
@@ -2141,6 +2159,15 @@ function desktopIconModel(roots) {
             removable: false,
         });
     }
+    icons.push({
+        id: "tmux",
+        label: "TMUX",
+        title: "tmux sessions on every PC",
+        peer: null,
+        art: { lucide: "square-terminal" },
+        open: () => void openTmuxWindow(),
+        removable: false,
+    });
     roots.forEach((root, index) => {
         icons.push({
             id: `drive:${index}`,
@@ -2190,6 +2217,194 @@ function desktopIconMarkup(icon) {
         ` style="--icon-accent:${escapeHTML(windowAccent(icon.peer))}" title="${escapeHTML(icon.title)}">` +
         `<span class="desktop-icon-art${glyph}">${art}</span>` +
         `<span class="desktop-icon-label">${escapeHTML(icon.label)}</span></button>`);
+}
+function tmuxHosts() {
+    return [
+        {
+            peer: null,
+            label: localHost.hostname.toUpperCase(),
+            glyph: localHost.glyph,
+        },
+        ...enrolledPeers.map((peer) => ({
+            peer,
+            label: peer.name.toUpperCase(),
+            glyph: peer.glyph,
+        })),
+    ];
+}
+function tmuxURL(peer) {
+    const query = new URLSearchParams();
+    if (peer)
+        query.set("peer", peer.url);
+    return `${peer ? "/api/remote" : "/api"}/tmux?${query}`;
+}
+async function loadTmuxHosts() {
+    // In parallel: one slow or dead PC must not hold up the others.
+    return Promise.all(tmuxHosts().map(async (host) => {
+        try {
+            const body = await api(tmuxURL(host.peer));
+            return {
+                ...host,
+                sessions: (body.sessions || []),
+                available: body.available !== false,
+                reachable: true,
+            };
+        }
+        catch {
+            return { ...host, sessions: [], available: false, reachable: false };
+        }
+    }));
+}
+function tmuxSessionRow(host, session) {
+    const windows = `${session.windows} ${session.windows === 1 ? "window" : "windows"}`;
+    // "attached" means someone is already looking at it, which on a
+    // shared box is the difference between resuming and interrupting.
+    const state = session.attached
+        ? '<span class="tmux-attached">attached</span>'
+        : "";
+    return (`<button type="button" class="tmux-session" data-peer="${escapeHTML(host.peer?.url || "")}" data-session="${escapeHTML(session.name)}">` +
+        `<i data-lucide="square-terminal"></i>` +
+        `<span class="tmux-session-name">${escapeHTML(session.name)}</span>` +
+        `<span class="tmux-session-meta">${windows}${session.created ? ` · started ${escapeHTML(date(session.created))}` : ""}</span>` +
+        state +
+        "</button>");
+}
+function tmuxHostMarkup(host) {
+    const body = !host.reachable
+        ? '<p class="tmux-note">Not reachable.</p>'
+        : !host.available
+            ? '<p class="tmux-note">tmux is not installed on this PC.</p>'
+            : host.sessions.length
+                ? host.sessions.map((session) => tmuxSessionRow(host, session)).join("")
+                : '<p class="tmux-note">No sessions yet.</p>';
+    // New sessions can only be made where tmux exists.
+    const create = host.reachable && host.available
+        ? `<button type="button" class="tmux-new" data-peer="${escapeHTML(host.peer?.url || "")}" title="New session on ${escapeHTML(host.label)}"><i data-lucide="plus"></i>New</button>`
+        : "";
+    return (`<section class="tmux-host" style="--icon-accent:${escapeHTML(windowAccent(host.peer))}">` +
+        `<header class="tmux-host-header"><span class="tmux-host-glyph">${escapeHTML(host.glyph)}</span>` +
+        `<span class="tmux-host-name">${escapeHTML(host.label)}</span>${create}</header>` +
+        `<div class="tmux-host-body">${body}</div></section>`);
+}
+async function refreshTmuxPanel(panel) {
+    const list = panel.querySelector(".tmux-list");
+    list.innerHTML = '<div class="empty"><sl-spinner></sl-spinner></div>';
+    const hosts = await loadTmuxHosts();
+    list.innerHTML = hosts.map(tmuxHostMarkup).join("");
+    iconify();
+}
+function tmuxPeerFor(url) {
+    return url ? enrolledPeers.find((peer) => peer.url === url) || null : null;
+}
+async function openTmuxWindow() {
+    const WinBox = window.WinBox;
+    if (!WinBox)
+        return;
+    const key = "tmux:sessions";
+    if (desktopWindows.has(key)) {
+        focusDesktopWindow(key);
+        return;
+    }
+    const panel = document.createElement("section");
+    panel.className = "tmux-window";
+    panel.innerHTML =
+        '<div class="tmux-list"></div>' +
+            '<footer class="tmux-actions"><span class="tmux-hint">Double-click a session to attach</span>' +
+            '<button type="button" class="tmux-refresh icon-button" title="Refresh"><i data-lucide="refresh-cw"></i></button></footer>';
+    const title = `${localHost.glyph} tmux sessions`;
+    const tmuxWindow = new WinBox({
+        title,
+        mount: panel,
+        class: "eta-window identity-window",
+        x: "center",
+        y: "center",
+        width: Math.min(720, window.innerWidth - 64),
+        height: Math.min(560, window.innerHeight - 120),
+        bottom: 40,
+        onclose: () => {
+            desktopWindows.delete(key);
+            refreshTaskStrip();
+            return false;
+        },
+        onfocus: () => {
+            activeWindowKey = key;
+            refreshTaskStrip();
+        },
+    });
+    colorWindow(tmuxWindow, null);
+    desktopWindows.set(key, {
+        title,
+        kind: "terminal",
+        peer: null,
+        persist: false,
+        window: tmuxWindow,
+        state: () => ({ kind: "file", root: 0, path: "" }),
+    });
+    activeWindowKey = key;
+    refreshTaskStrip();
+    // Same interaction split as the explorer and the desktop: click
+    // selects, double click opens.
+    panel.addEventListener("click", (event) => {
+        const row = event.target.closest(".tmux-session");
+        panel
+            .querySelectorAll(".tmux-session.is-selected")
+            .forEach((other) => other.classList.remove("is-selected"));
+        if (row)
+            row.classList.add("is-selected");
+    });
+    panel.addEventListener("dblclick", (event) => {
+        const row = event.target.closest(".tmux-session");
+        if (row)
+            void attachTmuxSession(row);
+    });
+    panel.addEventListener("keydown", (event) => {
+        const row = event.target.closest(".tmux-session");
+        if (row && event.key === "Enter")
+            void attachTmuxSession(row);
+    });
+    panel.querySelector(".tmux-refresh")?.addEventListener("click", () => {
+        void refreshTmuxPanel(panel);
+    });
+    panel.addEventListener("click", async (event) => {
+        const button = event.target.closest(".tmux-new");
+        if (!button)
+            return;
+        const peer = tmuxPeerFor(button.dataset.peer || "");
+        const name = window.prompt("New tmux session name:");
+        if (!name)
+            return;
+        try {
+            await api(tmuxURL(peer), {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ name }),
+            });
+            await refreshTmuxPanel(panel);
+            showToast(`Created ${name}`, "success");
+        }
+        catch (error) {
+            showToast(error.message);
+        }
+    });
+    await refreshTmuxPanel(panel);
+}
+async function attachTmuxSession(row) {
+    const peer = tmuxPeerFor(row.dataset.peer || "");
+    const session = row.dataset.session || "";
+    if (!session)
+        return;
+    try {
+        await openTerminalWindow({
+            peer,
+            root: 0,
+            path: "",
+            label: session,
+            tmux: session,
+        });
+    }
+    catch (error) {
+        showToast(error.message);
+    }
 }
 async function renderDesktopIcons() {
     const layer = $("#desktop-icons");
