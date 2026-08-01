@@ -108,6 +108,34 @@ func For(id, hostname string) Identity {
 	return Identity{ID: id, Hostname: hostname, Accent: accentFor(id), Glyph: glyphFor(id)}
 }
 
+// SetAccent atomically updates the accent for the identity at path.
+// It loads the existing identity, validates the new accent, writes the
+// result back to disk (atomic rename), and returns the updated identity.
+// If the file is missing or malformed the underlying load/store error is
+// returned verbatim so the caller can decide whether to recover. The
+// Hostname, ID, and Glyph fields are preserved from disk; callers wanting
+// to override them must use LoadOrCreate at startup.
+func SetAccent(path, accent string) (Identity, error) {
+	if !validAccent(accent) {
+		return Identity{}, fmt.Errorf("unknown accent %q", accent)
+	}
+	identity, err := load(path)
+	if err != nil {
+		return Identity{}, err
+	}
+	if identity.ID == "" {
+		return Identity{}, fmt.Errorf("read identity %q: missing id", path)
+	}
+	if identity.Accent == accent {
+		return identity, nil
+	}
+	identity.Accent = accent
+	if err := store(path, identity); err != nil {
+		return Identity{}, err
+	}
+	return identity, nil
+}
+
 func load(path string) (Identity, error) {
 	body, err := os.ReadFile(path)
 	if err != nil {

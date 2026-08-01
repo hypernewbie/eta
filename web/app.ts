@@ -1423,14 +1423,26 @@ function bindExplorer(view: ExplorerView) {
         modified: row.dataset.modified || "",
       },
     };
+    // If the user already cut this exact entry, preserve the cut
+    // intent through the drag. A fresh drag of a different entry
+    // is a copy. The unconditional reset here was a thorn: cutting
+    // then dragging silently demoted the operation to copy.
+    const preserveCut =
+      explorerClipboard?.entry.path === source.entry.path &&
+      explorerClipboardOperation === "cut";
     explorerClipboard = source;
-    explorerClipboardOperation = "copy";
+    explorerClipboardOperation = preserveCut ? "cut" : "copy";
     saveClipboard();
     if (event.dataTransfer) {
-      event.dataTransfer.effectAllowed = "copy";
+      event.dataTransfer.effectAllowed = preserveCut ? "move" : "copy";
       event.dataTransfer.setData(
         CLIPBOARD_MIME,
-        JSON.stringify(buildDescriptorFromEntry(source, "copy")),
+        JSON.stringify(
+          buildDescriptorFromEntry(
+            source,
+            preserveCut ? "cut" : "copy",
+          ),
+        ),
       );
     }
   });
@@ -1950,7 +1962,21 @@ $("#swatches").addEventListener("click", (event) => {
     "[data-theme]",
   ) as HTMLElement | null;
   if (!button) return;
-  setTheme(button.dataset.theme || "purple");
+  const name = button.dataset.theme || "purple";
+  setTheme(name);
+  // Persist to the server so the choice survives reload even if
+  // localStorage is cleared. The localStorage write inside setTheme
+  // covers the prepaint race; this covers process restart + a user
+  // who wipes browser storage.
+  void api("/api/identity", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ accent: name }),
+  }).catch(() => {
+    // Server may be down or this may be a test fixture without an
+    // identity file; the localStorage copy is still authoritative
+    // for the current session.
+  });
   $("#theme-dialog").hide();
 });
 document.addEventListener("keydown", (event) => {

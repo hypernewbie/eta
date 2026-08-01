@@ -23,6 +23,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -61,6 +62,8 @@ type server struct {
 	web          fs.FS
 	thumbs       *thumbnailCache
 	identity     hostid.Identity
+	identityPath string
+	identityMu   sync.RWMutex
 	state        *uistate.Store
 	peers        *peers.Store
 	remoteCache  *diskcache.Cache
@@ -136,6 +139,7 @@ func main() {
 		log.Fatal(err)
 	}
 	s.identity = identity
+	s.identityPath = identityPath
 	s.advertiseURL = strings.TrimSuffix(*advertiseURL, "/")
 	statePath := *stateFile
 	if statePath == "" {
@@ -288,7 +292,7 @@ func (s *server) routes() http.Handler {
 	mux.HandleFunc("GET /api/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	})
-	mux.HandleFunc("GET /api/identity", s.handleIdentity)
+	mux.HandleFunc("/api/identity", s.handleIdentity)
 	mux.HandleFunc("GET /api/state", s.handleStateGet)
 	mux.HandleFunc("POST /api/state", s.handleStatePut)
 	mux.HandleFunc("PUT /api/state", s.handleStatePut)
@@ -338,8 +342,47 @@ func (s *server) routes() http.Handler {
 	return securityHeaders(mux)
 }
 
-func (s *server) handleIdentity(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, s.identity)
+func (s *server) handleIdentity(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		s.identityMu.RLock()
+		identity := s.identity
+		s.identityMu.RUnlock()
+		writeJSON(w, http.StatusOK, identity)
+	case http.MethodPost:
+		s.handleIdentityUpdate(w, r)
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+// handleIdentityUpdate persists a new accent for the local host. The
+// server is the source of truth across reloads; the webapp mirrors
+// the choice to localStorage as a write-through cache so the prepaint
+// script can render the right colors before the first /api/identity
+// fetch returns. A POST without an identity file on disk (test
+// servers) responds 501 so callers can detect and degrade.
+func (s *server) handleIdentityUpdate(w http.ResponseWriter, r *http.Request) {
+	if s.identityPath == "" {
+		writeError(w, errors.New("identity persistence is unavailable"))
+		return
+	}
+	var request struct {
+		Accent string `json:"accent"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4<<10)).Decode(&request); err != nil {
+		writeError(w, fmt.Errorf("decode identity update: %w", err))
+		return
+	}
+	updated, err := hostid.SetAccent(s.identityPath, request.Accent)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	s.identityMu.Lock()
+	s.identity = updated
+	s.identityMu.Unlock()
+	writeJSON(w, http.StatusOK, updated)
 }
 
 func (s *server) handleStateGet(w http.ResponseWriter, _ *http.Request) {
@@ -707,7 +750,12 @@ func (s *server) attemptResume(ctx context.Context, job transfer.Job) {
 	srcPath := filepath.Join(s.roots[job.SourceRoot].Path, filepath.FromSlash(job.SourcePath))
 	info, err := os.Stat(srcPath)
 	if err != nil || (!info.Mode().IsRegular() && !info.IsDir()) {
-		s.transferJobs.Finish(job.ID, fmt.Errorf("interrupted by Eta restart: source %q unavailable", job.SourcePath))
+		// Auto-resume failure, distinct from the original restart
+		// interruption that landed us here. Wording must not
+		// duplicate the "interrupted by Eta restart" message that
+		// the user already saw, or they'll think the restart
+		// message just updated.
+		s.transferJobs.Finish(job.ID, fmt.Errorf("auto-resume failed: source %q unavailable", job.SourcePath))
 		return
 	}
 	transferCtx, cancel := context.WithTimeout(ctx, 30*time.Minute)
@@ -717,7 +765,7 @@ func (s *server) attemptResume(ctx context.Context, job transfer.Job) {
 	if info.IsDir() {
 		tree, err := transfer.BuildTree(srcPath)
 		if err != nil {
-			s.transferJobs.Finish(job.ID, fmt.Errorf("interrupted by Eta restart: %w", err))
+			s.transferJobs.Finish(job.ID, fmt.Errorf("auto-resume failed: %w", err))
 			return
 		}
 		transferErr = transfer.SendTreeWithProgress(transferCtx, client, job.DestinationPeer, job.DestinationRoot, job.DestinationPath, srcPath, tree, func(completed, _ int) {
