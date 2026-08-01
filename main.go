@@ -1536,7 +1536,7 @@ func (s *server) proxyCachedPeerRange(w http.ResponseWriter, r *http.Request, pe
 	return true
 }
 
-func (s *server) handlePeers(w http.ResponseWriter, _ *http.Request) {
+func (s *server) handlePeers(w http.ResponseWriter, r *http.Request) {
 	if s.peers == nil {
 		writeError(w, errors.New("peer inventory is unavailable"))
 		return
@@ -1546,7 +1546,41 @@ func (s *server) handlePeers(w http.ResponseWriter, _ *http.Request) {
 		writeError(w, err)
 		return
 	}
+	// Answer from the inventory and re-probe behind it. A peer that is
+	// slow or switched off must not delay the desktop coming up, so the
+	// refreshed colours land on the next poll rather than blocking this
+	// one.
+	go s.refreshPeerIdentities(context.WithoutCancel(r.Context()), items)
 	writeJSON(w, http.StatusOK, items)
+}
+
+// A peer's name, colour and glyph are copied into the inventory when it
+// is enrolled, so renaming a PC or changing its accent left every other
+// machine showing the old identity indefinitely.
+func (s *server) refreshPeerIdentities(ctx context.Context, items []peers.Peer) {
+	var wait sync.WaitGroup
+	for _, item := range items {
+		wait.Add(1)
+		go func(peer peers.Peer) {
+			defer wait.Done()
+			probeCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+			defer cancel()
+			identity, err := probePeer(probeCtx, peer.URL)
+			if err != nil {
+				// Unreachable is not "changed": keep the last known
+				// identity so an offline PC stays recognisable.
+				return
+			}
+			if identity.ID == peer.ID && identity.Hostname == peer.Name &&
+				identity.Accent == peer.Accent && identity.Glyph == peer.Glyph {
+				return
+			}
+			peer.ID, peer.Name, peer.Accent, peer.Glyph =
+				identity.ID, identity.Hostname, identity.Accent, identity.Glyph
+			_ = s.peers.Update(peer)
+		}(item)
+	}
+	wait.Wait()
 }
 func (s *server) handlePeerAdd(w http.ResponseWriter, r *http.Request) {
 	if s.peers == nil {

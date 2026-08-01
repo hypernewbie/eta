@@ -1838,6 +1838,14 @@ async function boot() {
             enrolledPeers = [];
         }
         await loadCopyTasks();
+        window.setInterval(() => void refreshPeerIdentities(), PEER_IDENTITY_POLL_MS);
+        // A tab left open in the background is the common case for this;
+        // catch up the moment it is looked at again rather than waiting out
+        // the interval.
+        document.addEventListener("visibilitychange", () => {
+            if (!document.hidden)
+                void refreshPeerIdentities();
+        });
         const restored = await loadDesktopState();
         restoringDesktop = true;
         const explorers = restored.filter((window) => window.kind === "explorer");
@@ -2217,6 +2225,52 @@ function desktopIconMarkup(icon) {
         ` style="--icon-accent:${escapeHTML(windowAccent(icon.peer))}" title="${escapeHTML(icon.title)}">` +
         `<span class="desktop-icon-art${glyph}">${art}</span>` +
         `<span class="desktop-icon-label">${escapeHTML(icon.label)}</span></button>`);
+}
+// A PC can be renamed or recoloured while this desktop is open. The
+// server re-probes peers behind each list call, so polling picks the
+// new identity up; without this the peer keeps the colour and name it
+// had when it was enrolled, on every surface here, forever.
+const PEER_IDENTITY_POLL_MS = 20_000;
+function peerIdentityFingerprint(list) {
+    return list
+        .map((peer) => `${peer.url}|${peer.name}|${peer.accent}|${peer.glyph}`)
+        .join("\n");
+}
+async function refreshPeerIdentities() {
+    if (!desktopEnabled())
+        return;
+    let latest;
+    try {
+        latest = await api("/api/peers");
+    }
+    catch {
+        return;
+    }
+    if (peerIdentityFingerprint(latest) === peerIdentityFingerprint(enrolledPeers)) {
+        return;
+    }
+    enrolledPeers = latest;
+    // Windows already on screen hold their own copy of the peer, and are
+    // coloured once when opened, so they have to be repainted rather than
+    // left to the next open.
+    for (const item of desktopWindows.values()) {
+        if (!item.peer)
+            continue;
+        const updated = enrolledPeers.find((peer) => peer.url === item.peer.url);
+        if (!updated)
+            continue;
+        item.peer = updated;
+        colorWindow(item.window, updated);
+    }
+    for (const view of explorerViews.values()) {
+        if (!view.state.peer)
+            continue;
+        const updated = enrolledPeers.find((peer) => peer.url === view.state.peer.url);
+        if (updated)
+            view.state.peer = updated;
+    }
+    // Redraws the dock, the computers menu and the desktop icons.
+    refreshTaskStrip();
 }
 function tmuxHosts() {
     return [

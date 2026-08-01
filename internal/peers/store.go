@@ -69,6 +69,28 @@ func (s *Store) Add(peer Peer) error {
 	p = append(p, peer)
 	return s.save(p)
 }
+
+// Update replaces an existing peer's details, keyed by URL. Identity is
+// not immutable: a PC can be renamed or have its colour changed, and the
+// inventory holds a copy taken at enrolment that would otherwise stay
+// wrong forever.
+func (s *Store) Update(peer Peer) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	peer.URL = strings.TrimSuffix(peer.URL, "/")
+	list, err := s.list()
+	if err != nil {
+		return err
+	}
+	for i := range list {
+		if list[i].URL == peer.URL {
+			list[i] = peer
+			return s.save(list)
+		}
+	}
+	return fmt.Errorf("unknown peer")
+}
+
 func (s *Store) Find(raw string) (Peer, bool, error) {
 	items, err := s.List()
 	if err != nil {
