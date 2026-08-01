@@ -108,38 +108,41 @@ button {
 }
 .brand {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   gap: 8px;
-  color: var(--text-primary);
-  text-decoration: none;
-  letter-spacing: 0.04em;
 }
-.sigil {
+.logo-glow-wrapper {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.brand .logo {
   color: var(--identity-accent);
   font-family: var(--font-mono);
+  font-size: 22px;
   font-weight: 600;
-  font-size: 24px;
   text-shadow: 0 0 10px var(--identity-glow);
   line-height: 1;
 }
-.wordmark {
-  font-family: var(--font-mono);
-  font-size: 13px;
+.brand .brand-name {
+  font-size: 16px;
   font-weight: 500;
-  letter-spacing: 0.12em;
+  letter-spacing: 0.5px;
+  color: var(--text-primary);
 }
-.host-identity {
-  display: flex;
-  align-items: baseline;
-  gap: 5px;
-  color: var(--identity-accent);
-  font: 10px var(--font-mono);
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
+.hostname-wrapper {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
 }
-.host-mark {
+.brand .hostname-display {
   color: var(--identity-accent);
-  font-size: 15px;
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: 0.75px;
+  margin-left: 2px;
+  opacity: 0.9;
   text-shadow: 0 0 8px var(--identity-glow);
 }
 .header-status {

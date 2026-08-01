@@ -27,7 +27,7 @@ test("taskbar closes and reopens Explorer", async ({ page }) => {
   await page.locator("#eta-launcher").click();
   const localLocation = page.locator('[data-location="local"]');
   await expect(localLocation).toBeVisible();
-  await expect(localLocation).toContainText((await page.locator("#host-name").textContent())?.toUpperCase() || "");
+  await expect(localLocation).toContainText((await page.locator("#hostname-display").textContent())?.toUpperCase() || "");
   await localLocation.click();
   const reopened = page.locator(".winbox.eta-window");
   await expect(reopened).toHaveCount(1);

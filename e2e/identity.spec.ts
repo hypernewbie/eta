@@ -8,7 +8,7 @@ test("local host identity labels the desktop and its windows", async ({
   const identity = await response.json();
   await page.goto("/");
 
-  await expect(page.locator("#host-name")).toHaveText(identity.hostname);
+  await expect(page.locator("#hostname-display")).toHaveText(identity.hostname);
   const title = page.locator(".winbox .wb-title").first();
   await expect(title).toContainText(`${identity.glyph} Explorer`);
   await expect(title).toHaveCSS("color", await page.evaluate(() => {
@@ -48,7 +48,7 @@ test("picking a swatch persists across a hard reload", async ({ page, request })
   expect(tealAfterClick.accent).toBe("teal");
 
   await page.reload();
-  await expect(page.locator("#host-name")).toBeVisible();
+  await expect(page.locator("#hostname-display")).toBeVisible();
   const tealAfterReload = await request
     .get("/api/identity")
     .then((r) => r.json());
@@ -64,7 +64,7 @@ test("picking a swatch persists across a hard reload", async ({ page, request })
   await page.click('[data-theme="red"]');
   await page.locator("#theme-dialog").waitFor({ state: "hidden" });
   await page.reload();
-  await expect(page.locator("#host-name")).toBeVisible();
+  await expect(page.locator("#hostname-display")).toBeVisible();
   const redAfterReload = await request
     .get("/api/identity")
     .then((r) => r.json());
