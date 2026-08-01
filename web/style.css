@@ -968,14 +968,28 @@ svg.file-type-icon {
 .task-button::part(base) {
   width: 100%;
   min-height: 32px;
+  align-items: center;
   justify-content: flex-start;
   overflow: hidden;
   border: 1px solid transparent;
   border-radius: 3px;
   background: transparent;
   color: var(--text-muted);
-  font: 11px var(--font-mono);
+  /* Longhand, not the font shorthand: the shorthand resets line-height
+     to normal, which with the default align-items: stretch dropped the
+     label 5px below the centre of a 32px button. */
+  font-size: 12px;
+  font-family: var(--font-mono);
+  line-height: 1;
   text-align: left;
+}
+/* Slotted content lives inside Shoelace's own label part, which keeps
+   its inherited line box and left the text below centre even once the
+   base was centred. */
+.task-button::part(label) {
+  display: flex;
+  align-items: center;
+  line-height: 1;
 }
 .task-button:hover::part(base),
 .task-button:focus-visible::part(base) {
@@ -994,17 +1008,24 @@ svg.file-type-icon {
   justify-content: flex-start;
   padding: 0 9px;
 }
-.task-window i {
+/* Lucide replaces the <i data-lucide> placeholder with an <svg>, so a
+   rule written only for <i> never applies to the rendered icon. These
+   sized nothing: the icon kept lucide's default 24px, took no accent
+   colour, and had no margin, so it sat flush against the label. */
+.task-window i,
+.task-window svg {
   width: 16px;
   height: 16px;
-  flex: 0 0 auto;
+  flex: 0 0 16px;
   margin-right: 8px;
   color: var(--window-accent, var(--text-muted));
 }
 .task-window-label {
   overflow: hidden;
   color: var(--text-primary);
-  font: 11px var(--font-mono);
+  font-size: 13px;
+  font-family: var(--font-mono);
+  line-height: 1;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -1026,9 +1047,11 @@ svg.file-type-icon {
 .copy-task-error::part(base) {
   color: var(--danger, #ef6b73);
 }
-.copy-task i {
+.copy-task i,
+.copy-task svg {
   width: 13px;
-  flex: 0 0 auto;
+  height: 13px;
+  flex: 0 0 13px;
   margin-right: 6px;
 }
 .windowed .app-shell {

@@ -490,6 +490,9 @@ async function loadLocalHost() {
   localHost = identity;
   setTheme(identity.accent, false);
   $("#hostname-display").textContent = identity.hostname.toUpperCase();
+  // Tab title names the machine, matching phi's "<glyph> <host>". The
+  // static "eta" told you nothing when several boxes were open.
+  document.title = `η ${identity.hostname.toLowerCase()}`;
 }
 function iconify() {
   window.lucide?.createIcons({ attrs: { "stroke-width": 1.65 } });
@@ -716,8 +719,14 @@ function focusDesktopWindow(key: string) {
   const item = desktopWindows.get(key);
   if (!item) return;
   activeWindowKey = key;
+  const wasMinimized = item.window.min;
+  const target = wasMinimized ? dockButtonRect(key) : null;
   item.window.restore();
   item.window.focus();
+  const element = item.window.window;
+  if (element && target && !reducedMotion()) {
+    animateWindowToDock(element, target, "restore");
+  }
   refreshTaskStrip();
 }
 // Keep the window frame and its dock button showing the current folder.
@@ -739,11 +748,73 @@ function toggleDesktopWindow(key: string) {
   const item = desktopWindows.get(key);
   if (!item) return;
   if (!item.window.min && key === activeWindowKey) {
+    minimizeDesktopWindow(key);
+    return;
+  }
+  focusDesktopWindow(key);
+}
+// A minimized window is hidden outright, so without this it just blinks
+// out of existence and the eye has nothing to follow. Animating it into
+// its own dock button is what makes the button legible as where the
+// window went.
+const MINIMIZE_MS = 170;
+function reducedMotion() {
+  return Boolean(
+    window.matchMedia?.("(prefers-reduced-motion: reduce)").matches,
+  );
+}
+function dockButtonRect(key: string) {
+  const button = $("#task-strip").querySelector(
+    `[data-window="${CSS.escape(key)}"]`,
+  );
+  const rect = button?.getBoundingClientRect();
+  return rect && rect.width > 0 ? rect : null;
+}
+function animateWindowToDock(
+  element: HTMLElement,
+  target: DOMRect,
+  direction: "minimize" | "restore",
+) {
+  const from = element.getBoundingClientRect();
+  if (!from.width || !from.height) return null;
+  // Scale and translate about the centre, so the two agree on where the
+  // window is heading.
+  const open = { transform: "translate(0px, 0px) scale(1, 1)", opacity: 1 };
+  const docked = {
+    transform:
+      `translate(${target.left + target.width / 2 - (from.left + from.width / 2)}px, ` +
+      `${target.top + target.height / 2 - (from.top + from.height / 2)}px) ` +
+      `scale(${Math.max(target.width / from.width, 0.04)}, ${Math.max(target.height / from.height, 0.04)})`,
+    opacity: 0.15,
+  };
+  return element.animate(
+    direction === "minimize" ? [open, docked] : [docked, open],
+    {
+      duration: MINIMIZE_MS,
+      easing: direction === "minimize" ? "ease-in" : "ease-out",
+    },
+  );
+}
+function minimizeDesktopWindow(key: string) {
+  const item = desktopWindows.get(key);
+  if (!item) return;
+  const element = item.window.window;
+  const target = dockButtonRect(key);
+  const animation =
+    element && target && !reducedMotion()
+      ? animateWindowToDock(element, target, "minimize")
+      : null;
+  // The window stays visible for the duration and is hidden only once
+  // the animation lands, otherwise it would be gone before it moved.
+  if (!animation) {
     item.window.minimize();
     refreshTaskStrip();
     return;
   }
-  focusDesktopWindow(key);
+  animation.addEventListener("finish", () => {
+    item.window.minimize();
+    refreshTaskStrip();
+  });
 }
 function desktopEnabled() {
   return Boolean(window.WinBox) && document.body.classList.contains("windowed");
