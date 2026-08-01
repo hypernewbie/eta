@@ -1260,6 +1260,13 @@ body.windowed {
   color: var(--identity-accent);
   font-size: 20px;
 }
+/* Computers are the machine's own glyph, sized to read as an identity
+   mark rather than a file-type icon. */
+.desktop-icon-computer,
+.desktop-icon-peer {
+  font-size: 22px;
+  line-height: 1;
+}
 .desktop-icon-art svg {
   width: 22px;
   height: 22px;

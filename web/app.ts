@@ -2388,7 +2388,15 @@ async function renderDesktopIcons() {
   } catch {
     roots = [];
   }
-  const local = roots
+  // Computers first, then the folders on them: the desktop reads
+  // top-down as "which machine" before "which place on it", and the
+  // local box is a computer like any peer rather than an implicit one
+  // you reach only through its roots.
+  const thisComputer =
+    `<button type="button" class="desktop-icon" data-computer="local" title="${escapeHTML(localHost.hostname)}">` +
+    `<span class="desktop-icon-art desktop-icon-computer">${escapeHTML(localHost.glyph)}</span>` +
+    `<span class="desktop-icon-label">${escapeHTML(localHost.hostname.toUpperCase())}</span></button>`;
+  const drives = roots
     .map(
       (root, index) =>
         `<button type="button" class="desktop-icon" data-root="${index}" title="${escapeHTML(root.name)}">` +
@@ -2396,7 +2404,7 @@ async function renderDesktopIcons() {
         `<span class="desktop-icon-label">${escapeHTML(root.name)}</span></button>`,
     )
     .join("");
-  const peers = enrolledPeers
+  const computers = enrolledPeers
     .map(
       (peer) =>
         `<button type="button" class="desktop-icon" data-peer="${escapeHTML(peer.url)}" title="${escapeHTML(peer.name)}">` +
@@ -2412,11 +2420,15 @@ async function renderDesktopIcons() {
         `<span class="desktop-icon-label">${escapeHTML(shortcut.name)}</span></button>`,
     )
     .join("");
-  layer.innerHTML = local + peers + pinned;
+  layer.innerHTML = thisComputer + computers + drives + pinned;
   layer.hidden = false;
   iconify();
 }
 function openDesktopIcon(icon: HTMLElement) {
+  if (icon.dataset.computer === "local") {
+    void openExplorerWindow();
+    return;
+  }
   if (icon.dataset.shortcut) {
     const shortcut = desktopShortcuts.find(
       (candidate) => shortcutKey(candidate) === icon.dataset.shortcut,
