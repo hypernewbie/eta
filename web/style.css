@@ -330,7 +330,7 @@ button {
   height: 18px;
   color: var(--text-muted);
 }
-iconify-icon.entry-icon {
+svg.file-type-icon {
   display: block;
   flex: 0 0 18px;
 }

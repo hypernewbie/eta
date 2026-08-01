@@ -681,9 +681,19 @@ function fileIcon(entry) {
         mp4: "vscode-icons:file-type-video",
     };
     const icon = icons[extension(entry.name)];
-    return icon
-        ? `<iconify-icon class="entry-icon file-type-icon" icon="${icon}"></iconify-icon>`
-        : '<i class="entry-icon" data-lucide="file"></i>';
+    return ((icon && fileTypeSVG(icon)) ||
+        '<i class="entry-icon" data-lucide="file"></i>');
+}
+// File-type icons are inlined from web/vendor/icons/file-icons.js rather
+// than resolved by an icon component. The icon set is fixed and small, and
+// a component that resolves icons at runtime is a network dependency and a
+// rendering race for no benefit here. Icon bodies come from the vendored
+// collection, so they are trusted markup, not user input.
+function fileTypeSVG(name) {
+    const icon = window.ETA_FILE_ICONS?.[name];
+    if (!icon)
+        return "";
+    return `<svg class="entry-icon file-type-icon" viewBox="0 0 ${icon.width} ${icon.height}" aria-hidden="true" focusable="false">${icon.body}</svg>`;
 }
 function entryMarkup(entry) {
     return `<button class="entry ${entry.kind}" data-path="${escapeHTML(entry.path)}" data-kind="${entry.kind}" data-size="${entry.size}" data-modified="${entry.modified}"><span class="entry-name-col">${fileIcon(entry)}<span class="entry-name">${escapeHTML(entry.name)}</span></span><span class="entry-meta">${date(entry.modified)}</span><span class="entry-meta">${entry.kind === "directory" ? "—" : bytes(entry.size)}</span></button>`;

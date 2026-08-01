@@ -4,14 +4,29 @@
   "license": "MIT",
   "scripts": {
     "build:web": "tsc --project tsconfig.json",
+    "vendor": "node scripts/vendor.mjs",
     "check:web": "tsc --noEmit --project tsconfig.json",
     "format:web": "prettier --write web/app.ts web/style.css web/index.html",
     "test:web": "playwright test",
     "test:web:fast": "playwright test --grep-invert=@peer"
   },
   "devDependencies": {
+    "@fontsource/inter": "^5.3.0",
+    "@fontsource/jetbrains-mono": "^5.3.0",
+    "@iconify-json/vscode-icons": "^1.2.68",
     "@playwright/test": "^1.52.0",
+    "@shoelace-style/shoelace": "^2.20.1",
+    "@xterm/addon-fit": "^0.10.0",
+    "@xterm/xterm": "^5.5.0",
+    "dayjs": "^1.11.13",
+    "dompurify": "^3.4.12",
+    "highlight.js": "^11.9.0",
+    "iconify-icon": "^3.0.0",
+    "lucide": "^0.468.0",
+    "marked": "^18.0.4",
     "prettier": "3.5.3",
-    "typescript": "5.7.3"
+    "prismjs": "^1.29.0",
+    "typescript": "5.7.3",
+    "winbox": "^0.2.82"
   }
 }
