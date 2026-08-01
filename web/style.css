@@ -1254,16 +1254,22 @@ body.windowed {
   width: 44px;
   height: 44px;
   place-items: center;
-  border: 1px solid color-mix(in srgb, var(--identity-accent) 26%, transparent);
+  /* --icon-accent is set per icon from the machine that owns it, so a
+     peer's folder is coloured by that peer rather than by this host. */
+  border: 1px solid
+    color-mix(
+      in srgb,
+      var(--icon-accent, var(--identity-accent)) 26%,
+      transparent
+    );
   border-radius: 10px;
   background: rgba(18, 18, 24, 0.72);
-  color: var(--identity-accent);
+  color: var(--icon-accent, var(--identity-accent));
   font-size: 20px;
 }
 /* Computers are the machine's own glyph, sized to read as an identity
    mark rather than a file-type icon. */
-.desktop-icon-computer,
-.desktop-icon-peer {
+.desktop-icon-glyph {
   font-size: 22px;
   line-height: 1;
 }
@@ -1284,12 +1290,28 @@ body.windowed {
   white-space: nowrap;
 }
 .desktop-icon:hover {
-  border-color: color-mix(in srgb, var(--identity-accent) 22%, transparent);
-  background: color-mix(in srgb, var(--identity-accent) 8%, transparent);
+  border-color: color-mix(
+    in srgb,
+    var(--icon-accent, var(--identity-accent)) 22%,
+    transparent
+  );
+  background: color-mix(
+    in srgb,
+    var(--icon-accent, var(--identity-accent)) 8%,
+    transparent
+  );
 }
 .desktop-icon.is-selected {
-  border-color: color-mix(in srgb, var(--identity-accent) 46%, transparent);
-  background: color-mix(in srgb, var(--identity-accent) 16%, transparent);
+  border-color: color-mix(
+    in srgb,
+    var(--icon-accent, var(--identity-accent)) 46%,
+    transparent
+  );
+  background: color-mix(
+    in srgb,
+    var(--icon-accent, var(--identity-accent)) 16%,
+    transparent
+  );
 }
 .windowed .app-shell {
   width: 100%;

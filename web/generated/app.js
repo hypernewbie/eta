@@ -2062,10 +2062,7 @@ function unpinFromDesktop(key) {
     void renderDesktopIcons();
     scheduleDesktopSave();
 }
-function openShortcut(shortcut) {
-    const peer = shortcut.peer
-        ? enrolledPeers.find((candidate) => candidate.url === shortcut.peer) || null
-        : null;
+function openShortcut(shortcut, peer) {
     if (shortcut.kind === "directory") {
         void openExplorerWindow({
             kind: "explorer",
@@ -2085,6 +2082,81 @@ function openShortcut(shortcut) {
         peer: shortcut.peer,
     });
 }
+let desktopIconIndex = new Map();
+let renderedDesktopIcons = "";
+function desktopIconModel(roots) {
+    const icons = [];
+    // Computers first, then the folders on them.
+    icons.push({
+        id: "computer:local",
+        label: localHost.hostname.toUpperCase(),
+        title: localHost.hostname.toUpperCase(),
+        peer: null,
+        art: { glyph: localHost.glyph },
+        open: () => void openExplorerWindow(),
+        removable: false,
+    });
+    for (const peer of enrolledPeers) {
+        icons.push({
+            id: `computer:${peer.url}`,
+            label: peer.name.toUpperCase(),
+            title: peer.name.toUpperCase(),
+            peer,
+            art: { glyph: peer.glyph },
+            open: () => void openExplorerWindow(undefined, peer),
+            removable: false,
+        });
+    }
+    roots.forEach((root, index) => {
+        icons.push({
+            id: `drive:${index}`,
+            label: root.name,
+            title: root.name,
+            peer: null,
+            art: { lucide: "hard-drive" },
+            open: () => void openExplorerWindow(undefined, null, index),
+            removable: false,
+        });
+    });
+    for (const shortcut of desktopShortcuts) {
+        const owner = shortcut.peer
+            ? enrolledPeers.find((candidate) => candidate.url === shortcut.peer) ||
+                null
+            : null;
+        icons.push({
+            id: `shortcut:${shortcutKey(shortcut)}`,
+            label: shortcut.name,
+            title: shortcut.peer
+                ? `${shortcut.path} on ${owner?.name.toUpperCase() || shortcut.peer}`
+                : shortcut.path,
+            peer: owner,
+            art: {
+                lucide: shortcut.kind === "directory" ? "folder" : "file-text",
+            },
+            open: () => {
+                // A shortcut to a peer that is no longer enrolled must not
+                // quietly open the same path on this machine.
+                if (shortcut.peer && !owner) {
+                    showToast(`${shortcut.name} is on a PC that is no longer added`);
+                    return;
+                }
+                openShortcut(shortcut, owner);
+            },
+            removable: true,
+        });
+    }
+    return icons;
+}
+function desktopIconMarkup(icon) {
+    const art = "glyph" in icon.art
+        ? escapeHTML(icon.art.glyph)
+        : `<i data-lucide="${escapeHTML(icon.art.lucide)}"></i>`;
+    const glyph = "glyph" in icon.art ? " desktop-icon-glyph" : "";
+    return (`<button type="button" class="desktop-icon" data-desktop-icon="${escapeHTML(icon.id)}"` +
+        ` style="--icon-accent:${escapeHTML(windowAccent(icon.peer))}" title="${escapeHTML(icon.title)}">` +
+        `<span class="desktop-icon-art${glyph}">${art}</span>` +
+        `<span class="desktop-icon-label">${escapeHTML(icon.label)}</span></button>`);
+}
 async function renderDesktopIcons() {
     const layer = $("#desktop-icons");
     if (!desktopEnabled()) {
@@ -2098,50 +2170,23 @@ async function renderDesktopIcons() {
     catch {
         roots = [];
     }
-    // Computers first, then the folders on them: the desktop reads
-    // top-down as "which machine" before "which place on it", and the
-    // local box is a computer like any peer rather than an implicit one
-    // you reach only through its roots.
-    const thisComputer = `<button type="button" class="desktop-icon" data-computer="local" title="${escapeHTML(localHost.hostname)}">` +
-        `<span class="desktop-icon-art desktop-icon-computer">${escapeHTML(localHost.glyph)}</span>` +
-        `<span class="desktop-icon-label">${escapeHTML(localHost.hostname.toUpperCase())}</span></button>`;
-    const drives = roots
-        .map((root, index) => `<button type="button" class="desktop-icon" data-root="${index}" title="${escapeHTML(root.name)}">` +
-        `<span class="desktop-icon-art"><i data-lucide="hard-drive"></i></span>` +
-        `<span class="desktop-icon-label">${escapeHTML(root.name)}</span></button>`)
-        .join("");
-    const computers = enrolledPeers
-        .map((peer) => `<button type="button" class="desktop-icon" data-peer="${escapeHTML(peer.url)}" title="${escapeHTML(peer.name)}">` +
-        `<span class="desktop-icon-art desktop-icon-peer">${escapeHTML(peer.glyph)}</span>` +
-        `<span class="desktop-icon-label">${escapeHTML(peer.name.toUpperCase())}</span></button>`)
-        .join("");
-    const pinned = desktopShortcuts
-        .map((shortcut) => `<button type="button" class="desktop-icon" data-shortcut="${escapeHTML(shortcutKey(shortcut))}" title="${escapeHTML(shortcut.path)}">` +
-        `<span class="desktop-icon-art"><i data-lucide="${shortcut.kind === "directory" ? "folder" : "file-text"}"></i></span>` +
-        `<span class="desktop-icon-label">${escapeHTML(shortcut.name)}</span></button>`)
-        .join("");
-    layer.innerHTML = thisComputer + computers + drives + pinned;
+    const icons = desktopIconModel(roots);
+    desktopIconIndex = new Map(icons.map((icon) => [icon.id, icon]));
+    const markup = icons.map(desktopIconMarkup).join("");
     layer.hidden = false;
+    // This runs on every taskbar refresh, and replacing the markup while
+    // lucide is mid-walk detaches the nodes it is about to swap, which
+    // throws "removeChild ... not a child of this node". Nothing to do
+    // when the desktop has not changed.
+    if (markup === renderedDesktopIcons)
+        return;
+    renderedDesktopIcons = markup;
+    layer.innerHTML = markup;
     iconify();
 }
-function openDesktopIcon(icon) {
-    if (icon.dataset.computer === "local") {
-        void openExplorerWindow();
-        return;
-    }
-    if (icon.dataset.shortcut) {
-        const shortcut = desktopShortcuts.find((candidate) => shortcutKey(candidate) === icon.dataset.shortcut);
-        if (shortcut)
-            openShortcut(shortcut);
-        return;
-    }
-    if (icon.dataset.peer) {
-        const peer = enrolledPeers.find((candidate) => candidate.url === icon.dataset.peer);
-        if (peer)
-            void openExplorerWindow(undefined, peer);
-        return;
-    }
-    void openExplorerWindow(undefined, null, Number(icon.dataset.root));
+function openDesktopIcon(element) {
+    const icon = desktopIconIndex.get(element.dataset.desktopIcon || "");
+    icon?.open();
 }
 $("#desktop-icons").addEventListener("click", (event) => {
     const icon = event.target.closest(".desktop-icon");
@@ -2159,11 +2204,13 @@ $("#desktop-icons").addEventListener("dblclick", (event) => {
 });
 $("#desktop-icons").addEventListener("contextmenu", (event) => {
     const icon = event.target.closest(".desktop-icon");
-    // Roots and peers are not shortcuts, so there is nothing to remove.
-    if (!icon?.dataset.shortcut)
+    // Only removable icons have anything to offer here; computers and
+    // drives are not shortcuts.
+    const model = desktopIconIndex.get(icon?.dataset.desktopIcon || "");
+    if (!icon || !model?.removable)
         return;
     event.preventDefault();
-    desktopContextKey = icon.dataset.shortcut;
+    desktopContextKey = model.id;
     const menu = $("#desktop-context-menu");
     menu.style.left = `${event.clientX}px`;
     menu.style.top = `${event.clientY}px`;
@@ -2178,12 +2225,10 @@ $("#desktop-context-menu").addEventListener("click", (event) => {
     if (!action || !key)
         return;
     if (action.dataset.desktopAction === "unpin") {
-        unpinFromDesktop(key);
+        unpinFromDesktop(key.replace(/^shortcut:/, ""));
         return;
     }
-    const shortcut = desktopShortcuts.find((candidate) => shortcutKey(candidate) === key);
-    if (shortcut)
-        openShortcut(shortcut);
+    desktopIconIndex.get(key)?.open();
 });
 $("#desktop-icons").addEventListener("keydown", (event) => {
     const icon = event.target.closest(".desktop-icon");
