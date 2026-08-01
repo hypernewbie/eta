@@ -83,6 +83,14 @@ func main() {
 	var roots rootsFlag
 	port := flag.Int("port", 7080, "HTTP port")
 	ip := flag.String("ip", "lan", `bind address; "lan" matches Phi: loopback + private LAN + Tailnet`)
+	// Cache defaults were consciously chosen, not silently accepted
+	// (journal 2026-07-30 "Known gaps" #5). Rough budget per coordinator
+	// instance: 64MB RAM hot ranges, 4GB on-disk remote byte ranges
+	// (requesting-side cache, sized for re-browsing large remote media
+	// without refetch), 2GB on-disk thumbnails (host-generated per source).
+	// Override per-deployment with --remote-cache-size / --hot-range-cache-size
+	// / --thumbnail-cache-size. Serving-host hot ranges are not enabled by
+	// default; add only if benchmarks justify them.
 	thumbnailCacheDir := flag.String("thumbnail-cache-dir", "", "directory for generated image thumbnails (default: user cache directory)")
 	thumbnailCacheSize := flag.String("thumbnail-cache-size", "2GB", "maximum thumbnail cache size (for example: 512MB, 2GB)")
 	identityFile := flag.String("identity-file", "", "persistent host identity file (default: user config directory)")
