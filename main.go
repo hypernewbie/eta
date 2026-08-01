@@ -73,6 +73,10 @@ type server struct {
 	treeStores   []*transfer.TreeStore
 	terminals    *terminal.Manager
 	advertiseURL string
+	// shutdown cancels long-running background goroutines so they
+	// don't outlive the http.Server's 10s shutdown grace period.
+	shutdown       context.Context
+	shutdownCancel context.CancelFunc
 }
 
 type entry struct {
@@ -227,7 +231,7 @@ func main() {
 	// process. Jobs without recorded source/destination are already
 	// marked interrupted by NewPersistentJobs; here we pick up the
 	// ones we can actually attempt to retry.
-	go s.resumePendingJobs(context.Background())
+	go s.resumePendingJobs(s.shutdown)
 
 	// Sweep stale tree-transfer staging on startup and then hourly.
 	// Without this, a sender that crashed mid-resume leaves its
@@ -235,7 +239,7 @@ func main() {
 	// TreeStore.Sweep was implemented and tested but never wired
 	// into the server lifecycle, so the orphans accumulated until
 	// the disk filled.
-	go s.sweepStaleTreeSessions(context.Background())
+	go s.sweepStaleTreeSessions(s.shutdown)
 
 	httpServer := &http.Server{
 		Handler:           s.routes(),
@@ -246,6 +250,12 @@ func main() {
 	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
 	go func() {
 		<-stop
+		// Cancel in-flight transfer and sweep goroutines so they
+		// don't outlive the http.Server's 10s shutdown grace period.
+		// Without this, a graceful shutdown can exit while a
+		// resume goroutine is mid-tree-commit, leaving the
+		// receiver with a staging tree that nothing will sweep up.
+		s.shutdownCancel()
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		_ = httpServer.Shutdown(ctx)
@@ -267,7 +277,15 @@ func newServer(paths []string) (*server, error) {
 	if err != nil {
 		return nil, fmt.Errorf("load embedded web assets: %w", err)
 	}
-	s := &server{web: web, identity: hostid.For("test-host", "eta"), terminals: terminal.NewManager(), transferJobs: transfer.NewJobs()}
+	ctx, cancel := context.WithCancel(context.Background())
+	s := &server{
+		web:          web,
+		identity:     hostid.For("test-host", "eta"),
+		terminals:    terminal.NewManager(),
+		transferJobs: transfer.NewJobs(),
+		shutdown:     ctx,
+	}
+	s.shutdownCancel = cancel
 	seen := map[string]bool{}
 	for _, path := range paths {
 		absolute, err := filepath.Abs(path)
