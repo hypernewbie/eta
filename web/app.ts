@@ -1713,11 +1713,19 @@ async function initializeExplorer(
     }
     await navigate(view, restored?.path || "");
   } catch (error) {
-    $("#server-status").textContent = "OFFLINE";
+    setServerOffline(true);
     showToast((error as Error).message);
   }
 }
 
+// "READ ONLY" was simply false — eta copies, moves and deletes — and
+// "CONNECTED" was hardcoded markup that only ever changed on failure.
+// The header now says nothing until something is actually wrong.
+function setServerOffline(offline: boolean) {
+  const status = $("#header-status");
+  status.hidden = !offline;
+  $("#server-status").textContent = offline ? "OFFLINE" : "";
+}
 async function loadDesktopState(): Promise<PersistedWindow[]> {
   try {
     const state = (await api("/api/state")) as { windows?: PersistedWindow[] };

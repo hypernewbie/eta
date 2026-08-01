@@ -63,10 +63,10 @@
           </div>
         </div>
         <div class="header-actions">
-          <div class="header-status">
-            <span class="pulse"></span><span>READ ONLY</span
-            ><span class="divider">·</span
-            ><span id="server-status">CONNECTED</span>
+          <!-- Silent while healthy. A badge that always reads CONNECTED
+               carries no information; this appears only when it does. -->
+          <div class="header-status" id="header-status" hidden>
+            <span class="pulse"></span><span id="server-status">OFFLINE</span>
           </div>
           <button class="icon-button" id="add-peer-button" title="Add PC">
             <i data-lucide="plus"></i>

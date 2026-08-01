@@ -174,8 +174,11 @@ button {
   align-items: center;
   gap: 8px;
 }
+.header-status[hidden] {
+  display: none;
+}
 .header-status {
-  color: var(--text-muted);
+  color: var(--danger, #ef6b73);
   display: flex;
   align-items: center;
   gap: 7px;
@@ -186,8 +189,8 @@ button {
   width: 6px;
   height: 6px;
   border-radius: 50%;
-  background: var(--green);
-  box-shadow: 0 0 10px var(--green);
+  background: var(--danger, #ef6b73);
+  box-shadow: 0 0 10px var(--danger, #ef6b73);
 }
 .divider {
   color: var(--text-dim);

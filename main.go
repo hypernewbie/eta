@@ -222,7 +222,7 @@ func main() {
 		}
 	}()
 
-	log.Printf("eta viewer — %d root(s), read-only", len(s.roots))
+	log.Printf("eta viewer — %d root(s)", len(s.roots))
 	for _, listener := range listeners {
 		log.Printf("serving http://%s", listener.Addr())
 	}
