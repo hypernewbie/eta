@@ -436,6 +436,37 @@ func TestStateEndpoint(t *testing.T) {
 	}
 }
 
+// Control-plane JSON describes state that changes underneath the client:
+// desktop windows, directory listings, peer inventory, transfer jobs. None
+// of it carries a validator, so without an explicit directive a client or
+// intermediary may apply heuristic freshness and serve a body that no
+// longer matches the server.
+func TestJSONEndpointsAreNotCacheable(t *testing.T) {
+	root := t.TempDir()
+	s, err := newServer([]string{root})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.state = uistate.New(filepath.Join(t.TempDir(), "state.json"))
+	for _, path := range []string{
+		"/api/state",
+		"/api/roots",
+		"/api/identity",
+		"/api/list?root=0&path=",
+		// /api/peers is omitted: a bare test server has no peer store
+		// configured and answers 500. It writes through the same helper.
+	} {
+		response := httptest.NewRecorder()
+		s.routes().ServeHTTP(response, httptest.NewRequest("GET", path, nil))
+		if response.Code != 200 {
+			t.Fatalf("%s status = %d, want 200", path, response.Code)
+		}
+		if got := response.Header().Get("Cache-Control"); got != "no-store" {
+			t.Errorf("%s Cache-Control = %q, want %q", path, got, "no-store")
+		}
+	}
+}
+
 func TestIdentityEndpoint(t *testing.T) {
 	s, err := newServer([]string{t.TempDir()})
 	if err != nil {

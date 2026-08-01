@@ -1831,6 +1831,14 @@ func securityHeaders(next http.Handler) http.Handler {
 }
 
 func writeJSON(w http.ResponseWriter, status int, value any) {
+	// Every JSON endpoint here answers with mutable control-plane state:
+	// desktop windows, directory listings, peer inventory, transfer jobs.
+	// None of it carries a validator, so a client or intermediary that
+	// applies heuristic freshness may reuse an old body and show a stale
+	// desktop or a directory that no longer looks like that. Byte and
+	// thumbnail responses are cached deliberately elsewhere, with ETags;
+	// they do not pass through here.
+	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(value)
