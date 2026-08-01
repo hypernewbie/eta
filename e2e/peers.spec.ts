@@ -65,6 +65,14 @@ test("enrolled peer opens as a source-aware remote Explorer", async ({
     });
     expect(enrolled.ok()).toBeTruthy();
 
+    // Push empty state right before goto so the prior test's
+    // pagehide beacon (racy with our _setup.ts beforeEach reset)
+    // can't pin the local Explorer at a stale path. The local
+    // explorer must open at root so README.md is visible for the
+    // copy-and-paste cross-instance sequence below.
+    await request.put("/api/state", {
+      data: { version: 1, windows: [] },
+    });
     await page.goto("/");
     await page.locator("#eta-launcher").click();
     const launcher = page.locator(`[data-location="${peerURL}"]`);
