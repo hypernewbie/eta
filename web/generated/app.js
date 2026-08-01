@@ -2218,6 +2218,18 @@ $("#add-peer-button").addEventListener("click", async () => {
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ url }),
         });
+        // The server knew about the new PC immediately; nothing on screen
+        // did, because enrolledPeers was only ever read at boot. So a peer
+        // added successfully stayed invisible in the computers menu and on
+        // the desktop until a reload.
+        try {
+            enrolledPeers = await api("/api/peers");
+        }
+        catch {
+            enrolledPeers = [...enrolledPeers, peer];
+        }
+        // Rebuilds the dock, the computers menu and the desktop icons.
+        refreshTaskStrip();
         showToast(`Added ${peer.name}`, "success");
     }
     catch (error) {
