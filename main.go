@@ -164,7 +164,7 @@ func main() {
 			log.Fatal(err)
 		}
 	}
-	remoteBytes, err := parseCacheBytes(*remoteCacheSize)
+	remoteBytes, err := parseBytes(*remoteCacheSize, "--remote-cache-size")
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -172,7 +172,7 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	hotRangeBytes, err := parseCacheBytes(*hotRangeCacheSize)
+	hotRangeBytes, err := parseBytes(*hotRangeCacheSize, "--hot-range-cache-size")
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -200,7 +200,7 @@ func main() {
 			log.Fatal(err)
 		}
 	}
-	cacheBytes, err := parseCacheBytes(*thumbnailCacheSize)
+	cacheBytes, err := parseBytes(*thumbnailCacheSize, "--thumbnail-cache-size")
 	if err != nil {
 		log.Fatal(err)
 	}

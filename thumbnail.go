@@ -108,6 +108,14 @@ func thumbnailSize(raw string) (int, error) {
 }
 
 func parseCacheBytes(raw string) (int64, error) {
+	return parseBytes(raw, "cache size")
+}
+
+// parseBytes parses a human-readable byte size like "4GB" / "512MB"
+// / "64 KiB". The label is used only in the error message so the
+// caller can identify which flag produced the bad value when more
+// than one cache size is configured.
+func parseBytes(raw string, label string) (int64, error) {
 	value := strings.ToUpper(strings.TrimSpace(raw))
 	multipliers := []struct {
 		suffix string
@@ -123,11 +131,11 @@ func parseCacheBytes(raw string) (int64, error) {
 		number := strings.TrimSpace(strings.TrimSuffix(value, unit.suffix))
 		parsed, err := strconv.ParseInt(number, 10, 64)
 		if err != nil || parsed <= 0 || parsed > (1<<63-1)/unit.bytes {
-			return 0, fmt.Errorf("invalid thumbnail cache size %q", raw)
+			return 0, fmt.Errorf("invalid %s %q", label, raw)
 		}
 		return parsed * unit.bytes, nil
 	}
-	return 0, fmt.Errorf("invalid thumbnail cache size %q", raw)
+	return 0, fmt.Errorf("invalid %s %q", label, raw)
 }
 
 func (c *thumbnailCache) get(source string, info fs.FileInfo, edge int) (thumbnailResult, error) {
