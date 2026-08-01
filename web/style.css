@@ -1265,16 +1265,84 @@ svg.file-type-icon {
 .inspector-content {
   min-height: 0;
   flex: 1;
-  padding: 22px 28px;
   overflow: auto;
+}
+/* A file viewer window is already a frame with the file's name on it.
+   Inset padding, a rounded card border and a second title bar naming
+   the language just repeat the window around the only thing being
+   looked at, so the code fills the window instead. */
+.inspector-content > .code-inspector {
+  display: flex;
+  height: 100%;
+  flex-direction: column;
+}
+.inspector-content .code-toolbar {
+  display: none;
+}
+.inspector-content .code-toolbar.is-truncated {
+  display: flex;
+  border: 0;
+  border-bottom: 1px solid var(--bg-border);
+  border-radius: 0;
+}
+.inspector-content .preview-text {
+  /* Was min-height: calc(100vh - 225px): viewport maths inside a window
+     that is not the viewport, so short files scrolled and the text sat
+     against the wrong edge. */
+  min-height: 0;
+  flex: 1;
+  border: 0;
+  border-radius: 0;
 }
 .inspector-actions {
   display: flex;
+  align-items: center;
   justify-content: flex-end;
   gap: 8px;
   padding: 10px 16px;
   border-top: 1px solid var(--bg-border);
   background: rgba(0, 0, 0, 0.14);
+}
+/* Shoelace's own variants are a fixed blue that ignores the identity
+   accent the rest of the window is themed with. */
+.inspector-actions sl-button::part(base) {
+  min-height: 30px;
+  align-items: center;
+  border: 1px solid color-mix(in srgb, var(--identity-accent) 34%, transparent);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--identity-accent) 10%, transparent);
+  color: var(--text-primary);
+  font-size: 12px;
+  font-family: var(--font-mono);
+  line-height: 1;
+  letter-spacing: 0.03em;
+}
+.inspector-actions sl-button::part(label) {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  line-height: 1;
+}
+.inspector-actions sl-button[variant="primary"]::part(base) {
+  border-color: var(--identity-accent);
+  background: color-mix(in srgb, var(--identity-accent) 22%, transparent);
+  color: var(--identity-accent);
+}
+.inspector-actions sl-button:hover::part(base) {
+  border-color: var(--identity-accent);
+  background: color-mix(in srgb, var(--identity-accent) 30%, transparent);
+  color: #fff;
+}
+.inspector-actions sl-button[disabled]::part(base) {
+  opacity: 0.45;
+}
+/* Lucide swaps the <i> placeholder for an <svg>, so rules written for
+   <i> alone never reach the rendered icon. */
+.inspector-actions sl-button i,
+.inspector-actions sl-button svg {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 14px;
 }
 @media (max-width: 650px) {
   .app-shell {

@@ -962,7 +962,7 @@ function renderText(raw, truncated, ext) {
     if (!language)
         return `<pre class="preview-text">${escapeHTML(raw)}${truncated ? "\n\n… preview truncated at 512 KB" : ""}</pre>`;
     const [prismLanguage, label] = language;
-    return `<section class="code-inspector"><header class="code-toolbar"><span>${label}</span><span>${truncated ? "preview truncated at 512 KB" : ""}</span></header><pre class="preview-text line-numbers language-${prismLanguage}"><code class="language-${prismLanguage}">${escapeHTML(raw)}</code></pre></section>`;
+    return `<section class="code-inspector"><header class="code-toolbar${truncated ? " is-truncated" : ""}"><span>${label}</span><span>${truncated ? "preview truncated at 512 KB" : ""}</span></header><pre class="preview-text line-numbers language-${prismLanguage}"><code class="language-${prismLanguage}">${escapeHTML(raw)}</code></pre></section>`;
 }
 async function renderPreview(view, entry, container) {
     container.innerHTML = '<div class="empty"><sl-spinner></sl-spinner></div>';
