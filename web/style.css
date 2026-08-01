@@ -943,23 +943,79 @@ svg.file-type-icon {
   bottom: 46px;
   left: 6px;
   width: min(270px, calc(100vw - 12px));
+  /* At 0.97 alpha the old panel was effectively opaque, so the blur
+     behind it did nothing and it read as a grey box. Real glass wants a
+     surface light enough to see through, held up by a strong blur and a
+     lit edge rather than by opacity. */
   overflow: hidden;
-  border: 1px solid var(--bg-border);
-  border-radius: 6px;
-  background: rgba(14, 14, 17, 0.97);
+  border: 1px solid color-mix(in srgb, var(--identity-accent) 24%, transparent);
+  border-radius: 12px;
+  background:
+    linear-gradient(
+      165deg,
+      color-mix(in srgb, var(--identity-accent) 12%, transparent),
+      transparent 42%
+    ),
+    linear-gradient(rgba(22, 22, 30, 0.72), rgba(10, 10, 14, 0.82));
   box-shadow:
-    0 16px 40px rgba(0, 0, 0, 0.5),
-    0 0 30px color-mix(in srgb, var(--identity-accent) 10%, transparent);
-  backdrop-filter: blur(18px) saturate(130%);
+    0 24px 60px rgba(0, 0, 0, 0.62),
+    0 0 42px color-mix(in srgb, var(--identity-accent) 22%, transparent),
+    inset 0 1px 0 rgba(255, 255, 255, 0.09),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.03);
+  backdrop-filter: blur(26px) saturate(180%);
+  -webkit-backdrop-filter: blur(26px) saturate(180%);
+  transform-origin: bottom left;
+  animation: eta-menu-in 160ms cubic-bezier(0.2, 0.9, 0.3, 1.2);
+}
+/* Rises from the launcher it belongs to rather than appearing whole. */
+@keyframes eta-menu-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+/* A specular sweep across the top edge, so the surface catches light
+   instead of being a flat tint. */
+.eta-menu::before {
+  content: "";
+  position: absolute;
+  z-index: 0;
+  top: 0;
+  right: 0;
+  left: 0;
+  height: 42%;
+  background: linear-gradient(
+    to bottom,
+    rgba(255, 255, 255, 0.07),
+    transparent
+  );
+  pointer-events: none;
+}
+.eta-menu > * {
+  position: relative;
+  z-index: 1;
+}
+@media (prefers-reduced-motion: reduce) {
+  .eta-menu {
+    animation: none;
+  }
 }
 .eta-menu[hidden] {
   display: none;
 }
 .eta-menu-label {
-  padding: 10px 12px 6px;
+  padding: 12px 14px 8px;
   color: var(--text-dim);
-  font: 10px var(--font-mono);
+  font-size: 10px;
+  font-family: var(--font-mono);
+  line-height: 1;
   letter-spacing: 0.12em;
+  text-shadow: 0 0 12px
+    color-mix(in srgb, var(--identity-accent) 45%, transparent);
 }
 .eta-location {
   display: flex;
@@ -980,12 +1036,19 @@ svg.file-type-icon {
 }
 .eta-location:hover,
 .eta-location:focus-visible {
-  background: color-mix(
-    in srgb,
-    var(--pc-accent, var(--text-primary)) 12%,
-    transparent
+  background: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--pc-accent, var(--text-primary)) 22%, transparent),
+    transparent 88%
   );
+  box-shadow: inset 2px 0 0 var(--pc-accent, var(--text-primary));
   outline: 0;
+}
+/* The glyph is the machine's identity, so let it glow with the accent
+   it is coloured by. */
+.eta-location-glyph {
+  text-shadow: 0 0 10px
+    color-mix(in srgb, var(--pc-accent, transparent) 70%, transparent);
 }
 .eta-location-glyph {
   width: 21px;
