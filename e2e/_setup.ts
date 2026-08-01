@@ -32,7 +32,34 @@
 import { test as base, expect } from "@playwright/test";
 import { rmSync } from "node:fs";
 
-export const test = base.extend<{ cleanDesktop: void }>({
+export const test = base.extend<{
+  cleanDesktop: void;
+  noExternalRequests: void;
+}>({
+  // Eta must render from the binary alone. Every browser dependency is
+  // vendored into web/vendor/, and this guard is what keeps it that way:
+  // a re-added CDN <script>, a font from a foundry, or a component that
+  // resolves assets over the network fails the suite instead of quietly
+  // reintroducing an internet dependency into a LAN/Tailnet tool.
+  noExternalRequests: [
+    async ({ page }, use) => {
+      const external: string[] = [];
+      page.on("request", (request) => {
+        const host = new URL(request.url()).hostname;
+        if (host !== "127.0.0.1" && host !== "localhost") {
+          external.push(request.url());
+        }
+      });
+      await use();
+      if (external.length) {
+        throw new Error(
+          `page made ${external.length} request(s) outside this machine:\n` +
+            [...new Set(external)].slice(0, 10).join("\n"),
+        );
+      }
+    },
+    { auto: true },
+  ],
   cleanDesktop: [
     async ({ page, request }, use) => {
       await page.addInitScript(() => {
