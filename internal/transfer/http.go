@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -115,11 +116,27 @@ func requestJSON(ctx context.Context, client *http.Client, method, endpoint stri
 	}
 	defer response.Body.Close()
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return fmt.Errorf("transfer peer: %s", response.Status)
+		return &httpStatusError{StatusCode: response.StatusCode, Status: response.Status}
 	}
 	if result != nil {
 		return json.NewDecoder(response.Body).Decode(result)
 	}
 	return nil
 }
+
+// httpStatusError carries the peer's HTTP status. Callers can use
+// errors.As to detect specific codes (e.g. 404 for legacy peers that
+// predate the tree-atomic extension).
+type httpStatusError struct {
+	StatusCode int
+	Status     string
+}
+
+func (e *httpStatusError) Error() string { return fmt.Sprintf("transfer peer: %s", e.Status) }
+
+func isPeerEndpointMissing(err error) bool {
+	var httpErr *httpStatusError
+	return errors.As(err, &httpErr) && httpErr.StatusCode == http.StatusNotFound
+}
+
 func SourceName(path string) string { return filepath.Base(path) }

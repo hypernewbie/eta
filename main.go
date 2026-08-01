@@ -67,6 +67,7 @@ type server struct {
 	hotRanges    *rangecache.Cache
 	transfers    *transfer.Store
 	transferJobs *transfer.Jobs
+	treeStores   []*transfer.TreeStore
 	terminals    *terminal.Manager
 	advertiseURL string
 }
@@ -269,6 +270,10 @@ func newServer(paths []string) (*server, error) {
 		seen[realPath] = true
 		s.roots = append(s.roots, root{Name: filepath.Base(realPath), Path: realPath})
 	}
+	s.treeStores = make([]*transfer.TreeStore, len(s.roots))
+	for i, r := range s.roots {
+		s.treeStores[i] = transfer.NewTreeStore(r.Path)
+	}
 	return s, nil
 }
 
@@ -303,6 +308,10 @@ func (s *server) routes() http.Handler {
 	mux.HandleFunc("GET /api/transfers/{id}", s.handleTransferStatus)
 	mux.HandleFunc("PUT /api/transfers/{id}/chunks/{chunk}", s.handleTransferChunk)
 	mux.HandleFunc("POST /api/transfers/{id}/finalize", s.handleTransferFinalize)
+	mux.HandleFunc("POST /api/transfer-trees", s.handleTransferTreeCreate)
+	mux.HandleFunc("GET /api/transfer-trees/{id}", s.handleTransferTreeStatus)
+	mux.HandleFunc("POST /api/transfer-trees/{id}/commit", s.handleTransferTreeCommit)
+	mux.HandleFunc("DELETE /api/transfer-trees/{id}", s.handleTransferTreeAbort)
 	mux.HandleFunc("GET /api/remote/roots", s.handleRemoteRoots)
 	mux.HandleFunc("GET /api/remote/list", s.handleRemoteList)
 	mux.HandleFunc("GET /api/remote/file", s.handleRemoteFile)
@@ -836,7 +845,171 @@ func (s *server) handleTransferFinalize(w http.ResponseWriter, r *http.Request) 
 		writeError(w, err)
 		return
 	}
+	// If this finalize landed inside an in-flight tree session, refresh
+	// the session's LastProgress so the crash-recovery sweep doesn't
+	// mistake a slow per-file stage for an abandoned transfer.
+	s.touchTreeForDestination(request.Root, destination)
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// touchTreeForDestination refreshes the LastProgress of any tree
+// session whose staging path is a prefix of `destination`. No-op when
+// no tree is active on this root or destination is outside staging.
+func (s *server) touchTreeForDestination(root int, destination string) {
+	if root < 0 || root >= len(s.treeStores) {
+		return
+	}
+	store := s.treeStores[root]
+	if store == nil {
+		return
+	}
+	intents, err := store.ListIntents()
+	if err != nil {
+		return
+	}
+	rootPath := s.roots[root].Path
+	for id := range intents {
+		staging := filepath.Join(rootPath, ".eta", "staging", id)
+		rel, err := filepath.Rel(staging, destination)
+		if err != nil {
+			continue
+		}
+		if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			continue
+		}
+		_ = store.Touch(id)
+		return
+	}
+}
+
+// handleTransferTreeCreate reserves a tree session, builds the staging
+// tree, and persists the intent record. The actual file bytes flow
+// through the existing /api/transfers endpoints targeting paths under
+// the staging prefix returned via the response.
+func (s *server) handleTransferTreeCreate(w http.ResponseWriter, r *http.Request) {
+	var request struct {
+		Root        int      `json:"root"`
+		Destination string   `json:"destination"`
+		Directories []string `json:"directories"`
+		Files       []struct {
+			Path string `json:"path"`
+			Size int64  `json:"size"`
+		} `json:"files"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 8<<20)).Decode(&request); err != nil {
+		writeError(w, err)
+		return
+	}
+	if request.Root < 0 || request.Root >= len(s.treeStores) {
+		writeError(w, errors.New("unknown root"))
+		return
+	}
+	// Validate every declared path up front; refuse anything that
+	// already exists in the destination.
+	for _, dir := range request.Directories {
+		if err := transfer.ValidateRelative(dir); err != nil {
+			writeError(w, fmt.Errorf("directory %q: %w", dir, err))
+			return
+		}
+	}
+	tree := transfer.Tree{Directories: request.Directories}
+	for _, file := range request.Files {
+		if err := transfer.ValidateRelative(file.Path); err != nil {
+			writeError(w, fmt.Errorf("file %q: %w", file.Path, err))
+			return
+		}
+		tree.Files = append(tree.Files, transfer.TreeFile{
+			Path:     file.Path,
+			Manifest: transfer.Manifest{Size: file.Size},
+		})
+	}
+	id, err := s.treeStores[request.Root].Create(request.Destination, tree)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, map[string]any{
+		"id":          id,
+		"root":        request.Root,
+		"destination": request.Destination,
+	})
+}
+
+// handleTransferTreeStatus returns the per-session intent plus a
+// complete map derived from the staging filesystem. Cheap to query
+// (no chunk manifest in the intent) so a sender can poll before
+// resuming without paying for rescan work.
+func (s *server) handleTransferTreeStatus(w http.ResponseWriter, r *http.Request) {
+	store, ok := s.resolveTreeStore(w, r)
+	if !ok {
+		return
+	}
+	id := r.PathValue("id")
+	intent, complete, err := store.Status(id)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	paths := make(map[string]bool, len(complete))
+	for k, v := range complete {
+		paths[k] = v
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"intent":   intent,
+		"complete": paths,
+	})
+}
+
+// handleTransferTreeCommit verifies every file is present in staging
+// at the expected size, then performs a single os.Rename of the
+// staging tree to the destination. POSIX-atomic on the destination
+// filesystem: the destination tree is either complete or absent.
+func (s *server) handleTransferTreeCommit(w http.ResponseWriter, r *http.Request) {
+	store, ok := s.resolveTreeStore(w, r)
+	if !ok {
+		return
+	}
+	if err := store.Commit(r.PathValue("id")); err != nil {
+		writeError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleTransferTreeAbort removes the staging tree and intent record
+// without committing. Errors are non-fatal: callers may retry.
+func (s *server) handleTransferTreeAbort(w http.ResponseWriter, r *http.Request) {
+	store, ok := s.resolveTreeStore(w, r)
+	if !ok {
+		return
+	}
+	if err := store.Abort(r.PathValue("id")); err != nil {
+		writeError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// resolveTreeStore picks the right TreeStore for a request by reading
+// the root query parameter. Centralized so handlers stay in lockstep
+// about the resolution rule. Returns (store, true) on success; on
+// failure it has already written a 4xx response and returns (_, false).
+func (s *server) resolveTreeStore(w http.ResponseWriter, r *http.Request) (*transfer.TreeStore, bool) {
+	rootQuery := r.URL.Query().Get("root")
+	if rootQuery == "" {
+		writeError(w, errors.New("missing root"))
+		return nil, false
+	}
+	var root int
+	if _, err := fmt.Sscanf(rootQuery, "%d", &root); err != nil {
+		writeError(w, fmt.Errorf("invalid root: %w", err))
+		return nil, false
+	}
+	if root < 0 || root >= len(s.treeStores) || s.treeStores[root] == nil {
+		writeError(w, errors.New("unknown root"))
+		return nil, false
+	}
+	return s.treeStores[root], true
 }
 func newTransferID() (string, error) {
 	var raw [16]byte
@@ -1199,6 +1372,14 @@ func (s *server) handleList(w http.ResponseWriter, r *http.Request) {
 	for _, item := range items {
 		info, err := item.Info()
 		if err != nil {
+			continue
+		}
+		// Hide Eta's hidden staging directory; never expose the
+		// .eta/ root (or anything beneath it) to listings or
+		// traversals. User-created files named .eta are refused at
+		// the validation layer, so this filter is purely defensive
+		// against odd filesystem states.
+		if item.Name() == ".eta" {
 			continue
 		}
 		childPath := item.Name()
