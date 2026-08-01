@@ -12,14 +12,40 @@ import (
 )
 
 // Job is a durable snapshot of an asynchronous outbound transfer.
+// SourcePeer / SourcePath and DestinationPeer / DestinationPath carry
+// the routing needed for the server to auto-resume the transfer after a
+// process restart. Empty peer means a local endpoint. Jobs whose
+// fields are populated and are not Done are left in that state on
+// restart so the resume goroutine can pick them up; jobs without
+// routing info are too old to resume and are marked interrupted.
 type Job struct {
-	ID        string    `json:"id"`
-	Name      string    `json:"name,omitempty"`
-	Completed int       `json:"completed"`
-	Total     int       `json:"total"`
-	Error     string    `json:"error,omitempty"`
-	Done      bool      `json:"done"`
-	Started   time.Time `json:"started"`
+	ID              string    `json:"id"`
+	Name            string    `json:"name,omitempty"`
+	Completed       int       `json:"completed"`
+	Total           int       `json:"total"`
+	Error           string    `json:"error,omitempty"`
+	Done            bool      `json:"done"`
+	Started         time.Time `json:"started"`
+	SourcePeer      string    `json:"sourcePeer,omitempty"`
+	SourceRoot      int       `json:"sourceRoot,omitempty"`
+	SourcePath      string    `json:"sourcePath,omitempty"`
+	DestinationPeer string    `json:"destinationPeer,omitempty"`
+	DestinationRoot int       `json:"destinationRoot,omitempty"`
+	DestinationPath string    `json:"destinationPath,omitempty"`
+}
+
+// JobSpec bundles the routing and size hints required to start a Job.
+// It is intentionally separate from Job's runtime fields so that
+// StartWith has no overlap with the polled-progress mutation path.
+type JobSpec struct {
+	Name            string
+	Total           int
+	SourcePeer      string
+	SourceRoot      int
+	SourcePath      string
+	DestinationPeer string
+	DestinationRoot int
+	DestinationPath string
 }
 
 // Jobs keeps small control-plane records. The optional path persists snapshots
@@ -47,30 +73,56 @@ func NewPersistentJobs(path string) (*Jobs, error) {
 	if err := json.Unmarshal(body, &loaded); err != nil {
 		return nil, err
 	}
+	marked := 0
 	for _, job := range loaded {
 		if job.ID == "" {
 			continue
 		}
-		if !job.Done {
+		// Jobs with full routing info are left in pre-restart state so
+		// resumePendingJobs can attempt a real retry on startup. Jobs
+		// without routing info (older versions or jobs the server
+		// never recorded) cannot be reconstructed, so we mark them
+		// interrupted with the previous journal wording.
+		if !job.Done && (job.SourcePath == "" || job.DestinationPath == "") {
 			job.Done = true
 			job.Error = "interrupted by Eta restart"
+			marked++
 		}
 		jobs.values[job.ID] = job
 	}
 	jobs.mu.Lock()
-	err = jobs.saveLocked()
-	jobs.mu.Unlock()
-	if err != nil {
-		return nil, err
+	if marked > 0 {
+		_ = jobs.saveLocked()
 	}
+	jobs.mu.Unlock()
 	return jobs, nil
 }
 
-func (j *Jobs) Start(total int) Job { return j.StartNamed(total, "") }
+func (j *Jobs) Start(total int) Job {
+	return j.StartWith(JobSpec{Total: total})
+}
+
 func (j *Jobs) StartNamed(total int, name string) Job {
+	return j.StartWith(JobSpec{Total: total, Name: name})
+}
+
+// StartWith records a new in-flight Job with the given routing. The
+// returned Job is also persisted; callers Progress/Finish to update it.
+func (j *Jobs) StartWith(spec JobSpec) Job {
 	var raw [12]byte
 	_, _ = rand.Read(raw[:])
-	job := Job{ID: hex.EncodeToString(raw[:]), Name: name, Total: total, Started: time.Now()}
+	job := Job{
+		ID:              hex.EncodeToString(raw[:]),
+		Name:            spec.Name,
+		Total:           spec.Total,
+		Started:         time.Now().UTC(),
+		SourcePeer:      spec.SourcePeer,
+		SourceRoot:      spec.SourceRoot,
+		SourcePath:      spec.SourcePath,
+		DestinationPeer: spec.DestinationPeer,
+		DestinationRoot: spec.DestinationRoot,
+		DestinationPath: spec.DestinationPath,
+	}
 	j.mu.Lock()
 	j.values[job.ID] = job
 	_ = j.saveLocked()

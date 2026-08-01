@@ -219,6 +219,12 @@ func main() {
 		log.Printf("serving http://%s", listener.Addr())
 	}
 
+	// Auto-resume any outbound transfers left in-flight by a previous
+	// process. Jobs without recorded source/destination are already
+	// marked interrupted by NewPersistentJobs; here we pick up the
+	// ones we can actually attempt to retry.
+	go s.resumePendingJobs(context.Background())
+
 	httpServer := &http.Server{
 		Handler:           s.routes(),
 		ReadHeaderTimeout: 10 * time.Second,
@@ -638,7 +644,15 @@ func (s *server) handleTransferSend(w http.ResponseWriter, r *http.Request) {
 		}
 		totalChunks = len(manifest.Chunks)
 	}
-	job := s.transferJobs.StartNamed(totalChunks, transfer.SourceName(source))
+	job := s.transferJobs.StartWith(transfer.JobSpec{
+		Name:            transfer.SourceName(source),
+		Total:           totalChunks,
+		SourceRoot:      request.SourceRoot,
+		SourcePath:      request.SourcePath,
+		DestinationPeer: peer.URL,
+		DestinationRoot: request.DestinationRoot,
+		DestinationPath: request.DestinationPath,
+	})
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 		defer cancel()
@@ -652,6 +666,69 @@ func (s *server) handleTransferSend(w http.ResponseWriter, r *http.Request) {
 		s.transferJobs.Finish(job.ID, transferErr)
 	}()
 	writeJSON(w, http.StatusAccepted, job)
+}
+
+// resumePendingJobs kicks off a retry goroutine for each non-done
+// outbound transfer captured at startup. Only local-source +
+// peer-destination jobs are eligible; cross-source retries are
+// deferred until we have a path to ask the source peer to re-scan.
+// Each goroutine updates the existing Job in place — no new Job is
+// recorded — so the taskbar shows one entry per original transfer.
+func (s *server) resumePendingJobs(ctx context.Context) {
+	if s.transferJobs == nil {
+		return
+	}
+	for _, job := range s.transferJobs.List() {
+		if job.Done {
+			continue
+		}
+		if job.SourcePath == "" || job.DestinationPath == "" {
+			continue
+		}
+		if job.SourceRoot < 0 || job.SourceRoot >= len(s.roots) {
+			continue
+		}
+		if job.SourcePeer != "" {
+			// Peer-source resume needs to fetch source listings from
+			// the peer; defer until that's wired.
+			continue
+		}
+		if job.DestinationPeer == "" {
+			// Local destination. The server can issue /api/copy to
+			// itself, but at-restart the user already saw this as
+			// interrupted; leave that path manual.
+			continue
+		}
+		go s.attemptResume(ctx, job)
+	}
+}
+
+func (s *server) attemptResume(ctx context.Context, job transfer.Job) {
+	srcPath := filepath.Join(s.roots[job.SourceRoot].Path, filepath.FromSlash(job.SourcePath))
+	info, err := os.Stat(srcPath)
+	if err != nil || (!info.Mode().IsRegular() && !info.IsDir()) {
+		s.transferJobs.Finish(job.ID, fmt.Errorf("interrupted by Eta restart: source %q unavailable", job.SourcePath))
+		return
+	}
+	transferCtx, cancel := context.WithTimeout(ctx, 30*time.Minute)
+	defer cancel()
+	client := &http.Client{Timeout: 30 * time.Second}
+	var transferErr error
+	if info.IsDir() {
+		tree, err := transfer.BuildTree(srcPath)
+		if err != nil {
+			s.transferJobs.Finish(job.ID, fmt.Errorf("interrupted by Eta restart: %w", err))
+			return
+		}
+		transferErr = transfer.SendTreeWithProgress(transferCtx, client, job.DestinationPeer, job.DestinationRoot, job.DestinationPath, srcPath, tree, func(completed, _ int) {
+			s.transferJobs.Progress(job.ID, completed)
+		})
+	} else {
+		_, transferErr = transfer.SendFileWithProgress(transferCtx, client, job.DestinationPeer, job.DestinationRoot, job.DestinationPath, srcPath, func(completed, _ int) {
+			s.transferJobs.Progress(job.ID, completed)
+		})
+	}
+	s.transferJobs.Finish(job.ID, transferErr)
 }
 
 // handleRemoteTransferSend asks an enrolled source host to transfer directly
