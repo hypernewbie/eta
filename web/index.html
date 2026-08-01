@@ -59,21 +59,23 @@
             <span id="hostname-display" class="hostname-display"></span>
           </div>
         </div>
-        <div class="header-status">
-          <span class="pulse"></span><span>READ ONLY</span
-          ><span class="divider">·</span
-          ><span id="server-status">CONNECTED</span>
+        <div class="header-actions">
+          <div class="header-status">
+            <span class="pulse"></span><span>READ ONLY</span
+            ><span class="divider">·</span
+            ><span id="server-status">CONNECTED</span>
+          </div>
+          <button class="icon-button" id="add-peer-button" title="Add PC">
+            <i data-lucide="plus"></i>
+          </button>
+          <button
+            class="icon-button"
+            id="theme-button"
+            title="Change identity color"
+          >
+            <i data-lucide="palette"></i>
+          </button>
         </div>
-        <button class="icon-button" id="add-peer-button" title="Add PC">
-          <i data-lucide="plus"></i>
-        </button>
-        <button
-          class="icon-button"
-          id="theme-button"
-          title="Change identity color"
-        >
-          <i data-lucide="palette"></i>
-        </button>
       </header>
 
       <div id="explorer-backstore"></div>
