@@ -717,6 +717,7 @@ function refreshTaskStrip() {
   });
   taskStrip.innerHTML = [...windows, ...copies].join("");
   refreshEtaMenu();
+  void renderDesktopIcons();
   iconify();
 }
 function focusDesktopWindow(key: string) {
@@ -856,6 +857,7 @@ function createExplorerPanel() {
 async function openExplorerWindow(
   restored?: PersistedWindow,
   peer: Peer | null = null,
+  startRoot?: number,
 ) {
   if (!window.WinBox || window.innerWidth < 700) return;
   document.body.classList.add("windowed");
@@ -926,7 +928,7 @@ async function openExplorerWindow(
   activeWindowKey = key;
   refreshTaskStrip();
   flushDesktopSave();
-  await initializeExplorer(view, restored);
+  await initializeExplorer(view, restored, startRoot);
 }
 
 function renderBreadcrumbs(view: ExplorerView) {
@@ -1879,6 +1881,7 @@ function selectEntry(view: ExplorerView, row: HTMLElement | null) {
 async function initializeExplorer(
   view: ExplorerView,
   restored?: PersistedWindow,
+  startRoot?: number,
 ) {
   bindExplorer(view);
   view.element("view-toggle").title =
@@ -1891,6 +1894,11 @@ async function initializeExplorer(
           `<option value="${root.id}">${escapeHTML(root.name)}</option>`,
       )
       .join("");
+    if (startRoot !== undefined && startRoot < view.state.roots.length) {
+      view.state.root = startRoot;
+      (view.element("root-select") as HTMLSelectElement).value =
+        String(startRoot);
+    }
     if (restored && restored.root < view.state.roots.length) {
       view.state.root = restored.root;
       (view.element("root-select") as HTMLSelectElement).value = String(
@@ -2244,6 +2252,73 @@ $("#file-context-menu").addEventListener("click", async (event) => {
 document.addEventListener("pointerdown", (event) => {
   if (!(event.target as HTMLElement).closest("#file-context-menu"))
     $("#file-context-menu").hidden = true;
+});
+// A desktop with nothing on it is just a wallpaper. Each root and each
+// enrolled peer gets an icon, so opening a location does not require
+// going through the launcher menu every time.
+async function renderDesktopIcons() {
+  const layer = $("#desktop-icons");
+  if (!desktopEnabled()) {
+    layer.hidden = true;
+    return;
+  }
+  let roots: Root[] = [];
+  try {
+    roots = await api("/api/roots");
+  } catch {
+    roots = [];
+  }
+  const local = roots
+    .map(
+      (root, index) =>
+        `<button type="button" class="desktop-icon" data-root="${index}" title="${escapeHTML(root.name)}">` +
+        `<span class="desktop-icon-art"><i data-lucide="hard-drive"></i></span>` +
+        `<span class="desktop-icon-label">${escapeHTML(root.name)}</span></button>`,
+    )
+    .join("");
+  const peers = enrolledPeers
+    .map(
+      (peer) =>
+        `<button type="button" class="desktop-icon" data-peer="${escapeHTML(peer.url)}" title="${escapeHTML(peer.name)}">` +
+        `<span class="desktop-icon-art desktop-icon-peer">${escapeHTML(peer.glyph)}</span>` +
+        `<span class="desktop-icon-label">${escapeHTML(peer.name.toUpperCase())}</span></button>`,
+    )
+    .join("");
+  layer.innerHTML = local + peers;
+  layer.hidden = false;
+  iconify();
+}
+function openDesktopIcon(icon: HTMLElement) {
+  if (icon.dataset.peer) {
+    const peer = enrolledPeers.find(
+      (candidate) => candidate.url === icon.dataset.peer,
+    );
+    if (peer) void openExplorerWindow(undefined, peer);
+    return;
+  }
+  void openExplorerWindow(undefined, null, Number(icon.dataset.root));
+}
+$("#desktop-icons").addEventListener("click", (event) => {
+  const icon = (event.target as HTMLElement).closest(
+    ".desktop-icon",
+  ) as HTMLElement | null;
+  // Single click selects, double click opens, matching the explorer.
+  $("#desktop-icons")
+    .querySelectorAll(".desktop-icon.is-selected")
+    .forEach((other) => other.classList.remove("is-selected"));
+  if (icon) icon.classList.add("is-selected");
+});
+$("#desktop-icons").addEventListener("dblclick", (event) => {
+  const icon = (event.target as HTMLElement).closest(
+    ".desktop-icon",
+  ) as HTMLElement | null;
+  if (icon) openDesktopIcon(icon);
+});
+$("#desktop-icons").addEventListener("keydown", (event) => {
+  const icon = (event.target as HTMLElement).closest(
+    ".desktop-icon",
+  ) as HTMLElement | null;
+  if (icon && event.key === "Enter") openDesktopIcon(icon);
 });
 $("#eta-launcher").addEventListener("click", (event) => {
   event.stopPropagation();

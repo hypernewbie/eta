@@ -1095,6 +1095,80 @@ svg.file-type-icon {
   flex: 0 0 13px;
   margin-right: 6px;
 }
+/* The desktop sat at nearly the same value as the window bodies, so
+   windows had no ground to sit on. Drop it well below them and let the
+   accent wash read as light on a dark surface. */
+.windowed body,
+body.windowed {
+  background:
+    radial-gradient(
+      ellipse 72% 44% at 50% -18%,
+      color-mix(in srgb, var(--identity-accent) 10%, transparent),
+      transparent 70%
+    ),
+    radial-gradient(circle at 50% 0%, #060608 0%, #030304 72%);
+}
+.desktop-icons {
+  position: fixed;
+  z-index: 1;
+  top: 56px;
+  bottom: 52px;
+  left: 0;
+  display: grid;
+  width: 128px;
+  align-content: start;
+  gap: 4px;
+  padding: 8px;
+}
+.desktop-icons[hidden] {
+  display: none;
+}
+.desktop-icon {
+  display: grid;
+  justify-items: center;
+  gap: 6px;
+  padding: 10px 6px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-primary);
+  cursor: pointer;
+}
+.desktop-icon-art {
+  display: grid;
+  width: 44px;
+  height: 44px;
+  place-items: center;
+  border: 1px solid color-mix(in srgb, var(--identity-accent) 26%, transparent);
+  border-radius: 10px;
+  background: rgba(18, 18, 24, 0.72);
+  color: var(--identity-accent);
+  font-size: 20px;
+}
+.desktop-icon-art svg {
+  width: 22px;
+  height: 22px;
+}
+.desktop-icon-label {
+  max-width: 108px;
+  overflow: hidden;
+  color: var(--text-primary);
+  font-size: 11px;
+  font-family: var(--font-mono);
+  line-height: 1.2;
+  text-align: center;
+  text-overflow: ellipsis;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.9);
+  white-space: nowrap;
+}
+.desktop-icon:hover {
+  border-color: color-mix(in srgb, var(--identity-accent) 22%, transparent);
+  background: color-mix(in srgb, var(--identity-accent) 8%, transparent);
+}
+.desktop-icon.is-selected {
+  border-color: color-mix(in srgb, var(--identity-accent) 46%, transparent);
+  background: color-mix(in srgb, var(--identity-accent) 16%, transparent);
+}
 .windowed .app-shell {
   width: 100%;
   min-height: 100vh;
