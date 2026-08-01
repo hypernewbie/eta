@@ -115,5 +115,24 @@ func (s *Store) save(p []Peer) error {
 	if e != nil {
 		return e
 	}
-	return os.WriteFile(s.path, append(b, '\n'), 0600)
+	// Atomic write (tempfile + rename) so a kill mid-write can't
+	// truncate the live peers.json. Matches the pattern in
+	// internal/hostid and internal/uistate; the journal claim
+	// 'all atomic on disk' depends on it.
+	temporary, e := os.CreateTemp(filepath.Dir(s.path), ".peers-*")
+	if e != nil {
+		return e
+	}
+	name := temporary.Name()
+	defer os.Remove(name)
+	if e := temporary.Chmod(0600); e == nil {
+		_, e = temporary.Write(append(b, '\n'))
+	}
+	if closeErr := temporary.Close(); e == nil {
+		e = closeErr
+	}
+	if e != nil {
+		return e
+	}
+	return os.Rename(name, s.path)
 }
