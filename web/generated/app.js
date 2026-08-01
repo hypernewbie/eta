@@ -170,25 +170,6 @@ function clearClipboard() {
     explorerClipboardOperation = "copy";
     localStorage.removeItem(CLIPBOARD_STORAGE_KEY);
 }
-function loadClipboardDescriptor() {
-    try {
-        const raw = localStorage.getItem(CLIPBOARD_STORAGE_KEY);
-        if (!raw)
-            return null;
-        const parsed = JSON.parse(raw);
-        if (!parsed ||
-            typeof parsed.host !== "string" ||
-            typeof parsed.root !== "number" ||
-            typeof parsed.path !== "string" ||
-            (parsed.operation !== "copy" && parsed.operation !== "cut")) {
-            return null;
-        }
-        return parsed;
-    }
-    catch {
-        return null;
-    }
-}
 function buildDescriptorFromEntry(source, operation) {
     return {
         host: source.view.state.peer?.url ?? "local",

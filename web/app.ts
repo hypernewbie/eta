@@ -304,25 +304,6 @@ function clearClipboard(): void {
   explorerClipboardOperation = "copy";
   localStorage.removeItem(CLIPBOARD_STORAGE_KEY);
 }
-function loadClipboardDescriptor(): ClipboardDescriptor | null {
-  try {
-    const raw = localStorage.getItem(CLIPBOARD_STORAGE_KEY);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw) as Partial<ClipboardDescriptor>;
-    if (
-      !parsed ||
-      typeof parsed.host !== "string" ||
-      typeof parsed.root !== "number" ||
-      typeof parsed.path !== "string" ||
-      (parsed.operation !== "copy" && parsed.operation !== "cut")
-    ) {
-      return null;
-    }
-    return parsed as ClipboardDescriptor;
-  } catch {
-    return null;
-  }
-}
 function buildDescriptorFromEntry(
   source: ExplorerEntry,
   operation: "copy" | "cut",
