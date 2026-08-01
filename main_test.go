@@ -643,3 +643,41 @@ func TestRemoteTerminalStreamsPeerOutput(t *testing.T) {
 		t.Fatal("remote terminal stream produced nothing")
 	}
 }
+
+// Dotfiles are hidden on every platform; the Windows attribute path is
+// covered by the build-tagged isHidden and cannot be exercised here.
+func TestListingMarksDotfilesHidden(t *testing.T) {
+	root := t.TempDir()
+	for _, name := range []string{".hidden-file", "visible.txt"} {
+		if err := os.WriteFile(filepath.Join(root, name), []byte("x"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Mkdir(filepath.Join(root, ".hidden-dir"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	server, err := newServer([]string{root})
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := httptest.NewRecorder()
+	server.routes().ServeHTTP(response, httptest.NewRequest("GET", "/api/list?root=0&path=", nil))
+	if response.Code != http.StatusOK {
+		t.Fatalf("list=%d %s", response.Code, response.Body.String())
+	}
+	var listing struct {
+		Entries []entry `json:"entries"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&listing); err != nil {
+		t.Fatal(err)
+	}
+	if len(listing.Entries) != 3 {
+		t.Fatalf("entries = %d, want 3: %+v", len(listing.Entries), listing.Entries)
+	}
+	for _, item := range listing.Entries {
+		want := strings.HasPrefix(item.Name, ".")
+		if item.Hidden != want {
+			t.Errorf("%q hidden = %v, want %v", item.Name, item.Hidden, want)
+		}
+	}
+}

@@ -89,6 +89,9 @@ type Entry = {
   kind: "directory" | "file";
   size: number;
   modified: string;
+  // Set by the server: a dotfile anywhere, or a file carrying the
+  // hidden or system attribute on Windows.
+  hidden?: boolean;
 };
 type AppState = {
   roots: Root[];
@@ -628,6 +631,31 @@ type CopyTask = {
 const copyTasks = new Map<string, CopyTask>();
 let enrolledPeers: Peer[] = [];
 const explorerViews = new Map<string, ExplorerView>();
+// Hidden files are off by default and the choice is global, the way a
+// file manager treats it — a per-window setting would mean the same
+// folder disagreeing with itself in two windows.
+const SHOW_HIDDEN_KEY = "eta.showHidden";
+let showHiddenEntries = localStorage.getItem(SHOW_HIDDEN_KEY) === "1";
+function visibleEntries(entries: Entry[]) {
+  return showHiddenEntries ? entries : entries.filter((entry) => !entry.hidden);
+}
+function setShowHidden(show: boolean) {
+  showHiddenEntries = show;
+  localStorage.setItem(SHOW_HIDDEN_KEY, show ? "1" : "0");
+  for (const view of explorerViews.values()) {
+    syncHiddenToggle(view);
+    // Re-list rather than re-filter a cached array: the listing is
+    // cheap and cannot go stale against what is on disk.
+    void navigate(view, view.state.path);
+  }
+}
+function syncHiddenToggle(view: ExplorerView) {
+  const button = view.element("hidden-toggle");
+  button.setAttribute("aria-pressed", String(showHiddenEntries));
+  button.classList.toggle("is-active", showHiddenEntries);
+  button.title = showHiddenEntries ? "Hide hidden files" : "Show hidden files";
+  button.innerHTML = `<i data-lucide="${showHiddenEntries ? "eye" : "eye-off"}"></i>`;
+}
 let restoringDesktop = false;
 let stateSaveTimer: number | undefined;
 
@@ -1022,7 +1050,7 @@ function gridEntryMarkup(view: ExplorerView, entry: Entry) {
 // A bare item count is the least a status bar can say. Report the
 // folder/file split and the size on disk of what is listed, which is
 // what you actually want to know before copying a directory around.
-function renderStatusBar(view: ExplorerView, entries: Entry[]) {
+function renderStatusBar(view: ExplorerView, entries: Entry[], hidden = 0) {
   const folders = entries.filter((entry) => entry.kind === "directory").length;
   const files = entries.length - folders;
   const total = entries.reduce(
@@ -1032,6 +1060,9 @@ function renderStatusBar(view: ExplorerView, entries: Entry[]) {
   const parts: string[] = [];
   if (folders) parts.push(`${folders} ${folders === 1 ? "folder" : "folders"}`);
   if (files) parts.push(`${files} ${files === 1 ? "file" : "files"}`);
+  // Say when something is being withheld, so an empty-looking folder is
+  // distinguishable from one that is only hiding its dotfiles.
+  if (hidden) parts.push(`${hidden} hidden`);
   view.element("item-count").textContent = parts.length
     ? parts.join(", ")
     : "empty folder";
@@ -1046,10 +1077,11 @@ function updateSelectionInfo(view: ExplorerView) {
     ? `${entry.name} — ${entry.kind === "directory" ? "folder" : bytes(entry.size)}`
     : "";
 }
-function renderEntries(view: ExplorerView, entries: Entry[]) {
+function renderEntries(view: ExplorerView, allEntries: Entry[]) {
+  const entries = visibleEntries(allEntries);
   // Rows are rebuilt here, so any previous highlight is gone with them.
   view.state.selected = null;
-  renderStatusBar(view, entries);
+  renderStatusBar(view, entries, allEntries.length - entries.length);
   const container = view.element("entries");
   view
     .element("file-table")
@@ -1637,6 +1669,10 @@ function bindExplorer(view: ExplorerView) {
   view
     .element("refresh-button")
     .addEventListener("click", () => navigate(view, view.state.path));
+  view.element("hidden-toggle").addEventListener("click", () => {
+    setShowHidden(!showHiddenEntries);
+  });
+  syncHiddenToggle(view);
   view.element("view-toggle").addEventListener("click", () => {
     view.state.view = view.state.view === "list" ? "grid" : "list";
     localStorage.setItem("eta_directory_view", view.state.view);

@@ -85,6 +85,9 @@ type entry struct {
 	Kind     string    `json:"kind"`
 	Size     int64     `json:"size"`
 	Modified time.Time `json:"modified"`
+	// Reported rather than filtered here: the client decides whether to
+	// show them, and only the server can see a Windows hidden attribute.
+	Hidden bool `json:"hidden,omitempty"`
 }
 
 func main() {
@@ -589,6 +592,7 @@ func (s *server) handleRemoteTerminalStart(w http.ResponseWriter, r *http.Reques
 func (s *server) handleRemoteTerminalOutput(w http.ResponseWriter, r *http.Request) {
 	s.proxyRemoteTerminal(w, r, "/api/terminals/"+url.PathEscape(r.PathValue("id")))
 }
+
 // The terminal stream is long-lived and must not be buffered or timed
 // out like the request/response endpoints: proxyRemoteTerminal uses a
 // 10s client and a plain io.Copy, which would cut a working terminal
@@ -1889,7 +1893,7 @@ func makeEntry(name, path string, info fs.FileInfo) entry {
 	if info.IsDir() {
 		kind = "directory"
 	}
-	return entry{Name: name, Path: filepath.ToSlash(path), Kind: kind, Size: info.Size(), Modified: info.ModTime()}
+	return entry{Name: name, Path: filepath.ToSlash(path), Kind: kind, Size: info.Size(), Modified: info.ModTime(), Hidden: isHidden(name, info)}
 }
 
 func securityHeaders(next http.Handler) http.Handler {

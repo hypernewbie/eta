@@ -294,6 +294,13 @@ button {
   color: var(--text-dim);
   width: 12px;
 }
+/* Pressed state for toolbar toggles, so "showing hidden files" is
+   visible without opening the menu it came from. */
+.toolbar-actions .icon-button.is-active {
+  color: var(--accent-bright);
+  background: var(--accent-wash);
+  border-color: color-mix(in srgb, var(--accent) 32%, transparent);
+}
 .toolbar-actions {
   margin-left: auto;
   display: flex;
