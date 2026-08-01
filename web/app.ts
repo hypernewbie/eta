@@ -69,6 +69,13 @@ type Theme = {
   accentBright: string;
 };
 type Root = { id: number; name: string };
+type DesktopShortcut = {
+  name: string;
+  kind: "directory" | "file";
+  root: number;
+  path: string;
+  peer?: string;
+};
 type Peer = {
   url: string;
   name: string;
@@ -276,6 +283,8 @@ const COLORS: Record<string, Theme> = {
   },
 };
 
+let desktopShortcuts: DesktopShortcut[] = [];
+let desktopContextKey: string | null = null;
 let dialogView: ExplorerView | null = null;
 type ExplorerEntry = { view: ExplorerView; entry: Entry };
 let contextEntry: ExplorerEntry | null = null;
@@ -623,7 +632,11 @@ function capturedDesktopState(): PersistedWindow[] {
     }));
 }
 function statePayload() {
-  return JSON.stringify({ version: 1, windows: capturedDesktopState() });
+  return JSON.stringify({
+    version: 1,
+    windows: capturedDesktopState(),
+    shortcuts: desktopShortcuts,
+  });
 }
 async function saveDesktopState() {
   try {
@@ -1233,6 +1246,16 @@ async function renderPreview(
 }
 
 async function openTerminal(view: ExplorerView, entry: Entry) {
+  // xterm measures the font once, when it is constructed, and caches the
+  // cell size from that. Constructed before the webfont arrives it locks
+  // in fallback metrics for the life of the terminal, which is what made
+  // the type look wrong rather than merely small.
+  try {
+    await document.fonts?.load('14px "JetBrains Mono"');
+  } catch {
+    // A missing font is a cosmetic problem, never a reason not to open
+    // a terminal.
+  }
   const created = await api(sourceURL(view, "terminals", {}), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -1258,7 +1281,9 @@ async function openTerminal(view: ExplorerView, entry: Entry) {
     ? new window.Terminal({
         cursorBlink: true,
         fontFamily: '"JetBrains Mono", ui-monospace, monospace',
-        fontSize: 13,
+        // 14px, as phi uses. Below that JetBrains Mono hints badly at
+        // this weight and the terminal looks like a fallback font.
+        fontSize: 14,
         theme: {
           background: "#090a0d",
           foreground: "#e4e6ed",
@@ -1778,6 +1803,8 @@ function bindExplorer(view: ExplorerView) {
     (
       menu.querySelector('[data-file-action="terminal"]') as HTMLElement
     ).hidden = !row;
+    (menu.querySelector('[data-file-action="pin"]') as HTMLElement).hidden =
+      !row;
     (menu.querySelector('[data-file-action="rename"]') as HTMLElement).hidden =
       !row || !!view.state.peer;
     (menu.querySelector('[data-file-action="delete"]') as HTMLElement).hidden =
@@ -1949,7 +1976,16 @@ function setServerOffline(offline: boolean) {
 }
 async function loadDesktopState(): Promise<PersistedWindow[]> {
   try {
-    const state = (await api("/api/state")) as { windows?: PersistedWindow[] };
+    const state = (await api("/api/state")) as {
+      windows?: PersistedWindow[];
+      shortcuts?: DesktopShortcut[];
+    };
+    // Go omits zero fields, so root 0 comes back absent rather than 0.
+    // Left undefined it would silently resolve to the first root, which
+    // is right by luck for root 0 and wrong for every other one.
+    desktopShortcuts = (
+      Array.isArray(state.shortcuts) ? state.shortcuts : []
+    ).map((shortcut) => ({ ...shortcut, root: Number(shortcut.root) || 0 }));
     return Array.isArray(state.windows) ? state.windows : [];
   } catch {
     return [];
@@ -2190,6 +2226,10 @@ $("#file-context-menu").addEventListener("click", async (event) => {
   contextEntry = null;
   if (!action || !target) return;
   try {
+    if (action.dataset.fileAction === "pin") {
+      pinToDesktop(target.view, target.entry);
+      return;
+    }
     if (action.dataset.fileAction === "terminal") {
       await openTerminal(target.view, target.entry);
       return;
@@ -2256,6 +2296,65 @@ document.addEventListener("pointerdown", (event) => {
 // A desktop with nothing on it is just a wallpaper. Each root and each
 // enrolled peer gets an icon, so opening a location does not require
 // going through the launcher menu every time.
+function shortcutKey(shortcut: DesktopShortcut) {
+  return `${shortcut.peer || "local"}:${shortcut.root}:${shortcut.path}`;
+}
+function pinToDesktop(view: ExplorerView, entry: Entry) {
+  const shortcut: DesktopShortcut = {
+    name: entry.name,
+    kind: entry.kind,
+    root: view.state.root,
+    path: entry.path,
+    peer: view.state.peer?.url,
+  };
+  if (
+    desktopShortcuts.some(
+      (other) => shortcutKey(other) === shortcutKey(shortcut),
+    )
+  ) {
+    showToast(`${entry.name} is already on the desktop`);
+    return;
+  }
+  desktopShortcuts.push(shortcut);
+  void renderDesktopIcons();
+  scheduleDesktopSave();
+  showToast(`Added ${entry.name} to the desktop`, "success");
+}
+function unpinFromDesktop(key: string) {
+  const before = desktopShortcuts.length;
+  desktopShortcuts = desktopShortcuts.filter(
+    (shortcut) => shortcutKey(shortcut) !== key,
+  );
+  if (desktopShortcuts.length === before) return;
+  void renderDesktopIcons();
+  scheduleDesktopSave();
+}
+function openShortcut(shortcut: DesktopShortcut) {
+  const peer = shortcut.peer
+    ? enrolledPeers.find((candidate) => candidate.url === shortcut.peer) || null
+    : null;
+  if (shortcut.kind === "directory") {
+    void openExplorerWindow(
+      {
+        kind: "explorer",
+        root: shortcut.root,
+        path: shortcut.path,
+        peer: shortcut.peer,
+      } as PersistedWindow,
+      peer,
+    );
+    return;
+  }
+  // A file shortcut opens the viewer, which needs an explorer view to
+  // resolve the file against, so it opens through the same restore path
+  // the desktop uses for file windows.
+  void restoreFileWindow({
+    kind: "file",
+    root: shortcut.root,
+    path: shortcut.path,
+    peer: shortcut.peer,
+  } as PersistedWindow);
+}
 async function renderDesktopIcons() {
   const layer = $("#desktop-icons");
   if (!desktopEnabled()) {
@@ -2284,11 +2383,26 @@ async function renderDesktopIcons() {
         `<span class="desktop-icon-label">${escapeHTML(peer.name.toUpperCase())}</span></button>`,
     )
     .join("");
-  layer.innerHTML = local + peers;
+  const pinned = desktopShortcuts
+    .map(
+      (shortcut) =>
+        `<button type="button" class="desktop-icon" data-shortcut="${escapeHTML(shortcutKey(shortcut))}" title="${escapeHTML(shortcut.path)}">` +
+        `<span class="desktop-icon-art"><i data-lucide="${shortcut.kind === "directory" ? "folder" : "file-text"}"></i></span>` +
+        `<span class="desktop-icon-label">${escapeHTML(shortcut.name)}</span></button>`,
+    )
+    .join("");
+  layer.innerHTML = local + peers + pinned;
   layer.hidden = false;
   iconify();
 }
 function openDesktopIcon(icon: HTMLElement) {
+  if (icon.dataset.shortcut) {
+    const shortcut = desktopShortcuts.find(
+      (candidate) => shortcutKey(candidate) === icon.dataset.shortcut,
+    );
+    if (shortcut) openShortcut(shortcut);
+    return;
+  }
   if (icon.dataset.peer) {
     const peer = enrolledPeers.find(
       (candidate) => candidate.url === icon.dataset.peer,
@@ -2313,6 +2427,37 @@ $("#desktop-icons").addEventListener("dblclick", (event) => {
     ".desktop-icon",
   ) as HTMLElement | null;
   if (icon) openDesktopIcon(icon);
+});
+$("#desktop-icons").addEventListener("contextmenu", (event) => {
+  const icon = (event.target as HTMLElement).closest(
+    ".desktop-icon",
+  ) as HTMLElement | null;
+  // Roots and peers are not shortcuts, so there is nothing to remove.
+  if (!icon?.dataset.shortcut) return;
+  event.preventDefault();
+  desktopContextKey = icon.dataset.shortcut;
+  const menu = $("#desktop-context-menu");
+  menu.style.left = `${event.clientX}px`;
+  menu.style.top = `${event.clientY}px`;
+  menu.hidden = false;
+  iconify();
+});
+$("#desktop-context-menu").addEventListener("click", (event) => {
+  const action = (event.target as HTMLElement).closest(
+    "[data-desktop-action]",
+  ) as HTMLElement | null;
+  const key = desktopContextKey;
+  $("#desktop-context-menu").hidden = true;
+  desktopContextKey = null;
+  if (!action || !key) return;
+  if (action.dataset.desktopAction === "unpin") {
+    unpinFromDesktop(key);
+    return;
+  }
+  const shortcut = desktopShortcuts.find(
+    (candidate) => shortcutKey(candidate) === key,
+  );
+  if (shortcut) openShortcut(shortcut);
 });
 $("#desktop-icons").addEventListener("keydown", (event) => {
   const icon = (event.target as HTMLElement).closest(
@@ -2343,6 +2488,8 @@ $("#eta-menu").addEventListener("click", (event) => {
 document.addEventListener("pointerdown", (event) => {
   if (!(event.target as HTMLElement).closest("#eta-menu, #eta-launcher"))
     $("#eta-menu").hidden = true;
+  if (!(event.target as HTMLElement).closest("#desktop-context-menu"))
+    $("#desktop-context-menu").hidden = true;
 });
 $("#task-strip").addEventListener("click", (event) => {
   const button = (event.target as HTMLElement).closest(

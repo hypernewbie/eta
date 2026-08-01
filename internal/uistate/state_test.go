@@ -51,3 +51,26 @@ func TestStoreRejectsUnsafeWindows(t *testing.T) {
 		}
 	}
 }
+
+func TestStoreKeepsAndGuardsShortcuts(t *testing.T) {
+	store := New(filepath.Join(t.TempDir(), "state.json"))
+	want := State{Shortcuts: []Shortcut{{Name: "docs", Kind: "directory", Root: 1, Path: "docs"}}}
+	if err := store.Save(want); err != nil {
+		t.Fatal(err)
+	}
+	got, err := store.Load()
+	if err != nil || len(got.Shortcuts) != 1 || got.Shortcuts[0].Path != "docs" {
+		t.Fatalf("shortcut round trip = %#v, %v", got, err)
+	}
+	// A shortcut must not be able to name anything outside a root.
+	for _, state := range []State{
+		{Shortcuts: []Shortcut{{Name: "x", Kind: "directory", Path: "/etc"}}},
+		{Shortcuts: []Shortcut{{Name: "x", Kind: "directory", Path: "../../etc"}}},
+		{Shortcuts: []Shortcut{{Name: "x", Kind: "socket", Path: "a"}}},
+		{Shortcuts: []Shortcut{{Name: "", Kind: "file", Path: "a"}}},
+	} {
+		if err := store.Save(state); err == nil {
+			t.Fatalf("unsafe shortcut accepted: %#v", state)
+		}
+	}
+}

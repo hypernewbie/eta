@@ -142,7 +142,20 @@
         </section>
       </template>
     </main>
-    <div id="desktop-icons" class="desktop-icons" aria-label="Desktop" hidden></div>
+    <div
+      id="desktop-icons"
+      class="desktop-icons"
+      aria-label="Desktop"
+      hidden
+    ></div>
+    <div id="desktop-context-menu" class="file-context-menu" hidden>
+      <button type="button" data-desktop-action="open">
+        <i data-lucide="folder-open"></i> Open
+      </button>
+      <button type="button" data-desktop-action="unpin" class="danger">
+        <i data-lucide="pin-off"></i> Remove from Desktop
+      </button>
+    </div>
     <nav id="taskbar" class="taskbar" aria-label="Desktop taskbar">
       <button
         id="eta-launcher"
@@ -174,6 +187,9 @@
       </button>
       <button type="button" data-file-action="paste">
         <i data-lucide="clipboard-paste"></i> Paste into Folder
+      </button>
+      <button type="button" data-file-action="pin">
+        <i data-lucide="pin"></i> Add to Desktop
       </button>
       <button type="button" data-file-action="rename">
         <i data-lucide="pencil"></i> Rename

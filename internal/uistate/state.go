@@ -12,6 +12,7 @@ import (
 
 const Version = 1
 const maxWindows = 128
+const maxShortcuts = 64
 
 type Window struct {
 	Kind      string `json:"kind"`
@@ -26,9 +27,21 @@ type Window struct {
 	Maximized bool   `json:"maximized,omitempty"`
 }
 
+// Shortcut is a location pinned to the desktop. It is intent, not a
+// cached listing: the target is resolved when it is opened, so a
+// shortcut to something since deleted simply fails to open.
+type Shortcut struct {
+	Name string `json:"name"`
+	Kind string `json:"kind"`
+	Root int    `json:"root,omitempty"`
+	Path string `json:"path,omitempty"`
+	Peer string `json:"peer,omitempty"`
+}
+
 type State struct {
-	Version int      `json:"version"`
-	Windows []Window `json:"windows,omitempty"`
+	Version   int        `json:"version"`
+	Windows   []Window   `json:"windows,omitempty"`
+	Shortcuts []Shortcut `json:"shortcuts,omitempty"`
 }
 
 type Store struct {
@@ -125,6 +138,25 @@ func validate(state State) error {
 		}
 		if window.Width < 0 || window.Height < 0 || window.X < 0 || window.Y < 0 {
 			return fmt.Errorf("invalid window geometry")
+		}
+	}
+	if len(state.Shortcuts) > maxShortcuts {
+		return fmt.Errorf("UI state has too many shortcuts")
+	}
+	for _, shortcut := range state.Shortcuts {
+		if shortcut.Kind != "directory" && shortcut.Kind != "file" {
+			return fmt.Errorf("unknown shortcut kind %q", shortcut.Kind)
+		}
+		// Same path rules as windows: a shortcut must not be able to
+		// name anything outside a configured root.
+		if shortcut.Root < 0 || shortcut.Path == "" || strings.HasPrefix(shortcut.Path, "/") || strings.Contains(shortcut.Path, "\\") || strings.Contains(shortcut.Path, "..") {
+			return fmt.Errorf("invalid shortcut path")
+		}
+		if len(shortcut.Name) > 256 || shortcut.Name == "" {
+			return fmt.Errorf("invalid shortcut name")
+		}
+		if shortcut.Peer != "" && (len(shortcut.Peer) > 2048 || !strings.HasPrefix(shortcut.Peer, "http")) {
+			return fmt.Errorf("invalid shortcut peer")
 		}
 	}
 	return nil
