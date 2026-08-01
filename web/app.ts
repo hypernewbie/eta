@@ -95,7 +95,13 @@ type ExplorerTab = {
   peer: Peer | null;
 };
 function activeTab(state: AppState): ExplorerTab {
-  return state.tabs[state.activeTab] ?? { root: state.root, path: state.path, peer: state.peer };
+  return (
+    state.tabs[state.activeTab] ?? {
+      root: state.root,
+      path: state.path,
+      peer: state.peer,
+    }
+  );
 }
 function syncActiveTab(state: AppState) {
   const tab = state.tabs[state.activeTab];
@@ -867,16 +873,21 @@ function renderTabStrip(view: ExplorerView) {
   const activeIdx = view.state.activeTab;
   const buttons = tabs
     .map((tab, idx) => {
-      const label = tab.path === "" ? "/" : tab.path.split("/").filter(Boolean).pop() || "/";
+      const label =
+        tab.path === ""
+          ? "/"
+          : tab.path.split("/").filter(Boolean).pop() || "/";
       const peerTag = tab.peer ? ` · ${tab.peer.glyph}` : "";
       const active = idx === activeIdx ? " tab-active" : "";
-      const close = tabs.length > 1
-        ? `<button class="tab-close" data-tab-close="${idx}" title="Close tab" aria-label="Close tab">×</button>`
-        : "";
+      const close =
+        tabs.length > 1
+          ? `<button class="tab-close" data-tab-close="${idx}" title="Close tab" aria-label="Close tab">×</button>`
+          : "";
       return `<button class="eta-tab${active}" draggable="true" data-tab="${idx}" role="tab" aria-selected="${idx === activeIdx}" title="${escapeHTML(tab.path || "/")}"><span class="tab-label">${escapeHTML(label)}${escapeHTML(peerTag)}</span>${close}</button>`;
     })
     .join("");
-  const newTab = '<button class="eta-tab-new" data-tab-new title="New tab" aria-label="New tab">+</button>';
+  const newTab =
+    '<button class="eta-tab-new" data-tab-new title="New tab" aria-label="New tab">+</button>';
   strip.innerHTML = buttons + newTab;
   iconify();
 }
@@ -910,7 +921,11 @@ function openNewTab(view: ExplorerView) {
   // with an empty path (root listing). Distinct tabs are usually
   // opened to point at a subfolder, but root is a safe default.
   const current = activeTab(view.state);
-  view.state.tabs.push({ root: current.root, path: "", peer: current.peer ? { ...current.peer } : null });
+  view.state.tabs.push({
+    root: current.root,
+    path: "",
+    peer: current.peer ? { ...current.peer } : null,
+  });
   view.state.activeTab = view.state.tabs.length - 1;
   switchTab(view, view.state.activeTab);
 }
@@ -930,7 +945,6 @@ function reorderTabs(view: ExplorerView, from: number, to: number) {
   }
   renderTabStrip(view);
 }
-
 
 async function navigate(view: ExplorerView, path = "") {
   view.state.path = path;
@@ -1102,7 +1116,11 @@ async function openTerminal(view: ExplorerView, entry: Entry) {
               if (!line.startsWith("data:")) continue;
               const payload = line.slice(5).trim();
               if (!payload) continue;
-              let parsed: { output?: string; offset?: number; closed?: boolean };
+              let parsed: {
+                output?: string;
+                offset?: number;
+                closed?: boolean;
+              };
               try {
                 parsed = JSON.parse(payload);
               } catch {
@@ -1340,7 +1358,9 @@ function bindExplorer(view: ExplorerView) {
   strip.addEventListener("click", (event) => {
     const target = event.target as HTMLElement;
     if (target.closest("[data-tab-close]")) {
-      const idx = Number(target.closest("[data-tab-close]")!.getAttribute("data-tab-close"));
+      const idx = Number(
+        target.closest("[data-tab-close]")!.getAttribute("data-tab-close"),
+      );
       closeTab(view, idx);
       return;
     }
@@ -1356,11 +1376,16 @@ function bindExplorer(view: ExplorerView) {
   });
   // HTML5 drag-to-reorder within the strip.
   strip.addEventListener("dragstart", (event) => {
-    const tab = (event.target as HTMLElement).closest("[data-tab]") as HTMLElement | null;
+    const tab = (event.target as HTMLElement).closest(
+      "[data-tab]",
+    ) as HTMLElement | null;
     if (!tab) return;
     if (event.dataTransfer) {
       event.dataTransfer.effectAllowed = "move";
-      event.dataTransfer.setData("text/plain", tab.getAttribute("data-tab") ?? "");
+      event.dataTransfer.setData(
+        "text/plain",
+        tab.getAttribute("data-tab") ?? "",
+      );
     }
   });
   strip.addEventListener("dragover", (event) => {
@@ -1369,7 +1394,9 @@ function bindExplorer(view: ExplorerView) {
     if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
   });
   strip.addEventListener("drop", (event) => {
-    const target = (event.target as HTMLElement).closest("[data-tab]") as HTMLElement | null;
+    const target = (event.target as HTMLElement).closest(
+      "[data-tab]",
+    ) as HTMLElement | null;
     if (!target) return;
     event.preventDefault();
     const from = Number(event.dataTransfer?.getData("text/plain") ?? "");
@@ -1397,8 +1424,7 @@ function bindExplorer(view: ExplorerView) {
       view,
       entry: {
         path: row.dataset.path || "",
-        name:
-          row.querySelector(".entry-name, .grid-name")?.textContent || "",
+        name: row.querySelector(".entry-name, .grid-name")?.textContent || "",
         kind: row.dataset.kind as Entry["kind"],
         size: Number(row.dataset.size),
         modified: row.dataset.modified || "",
@@ -1419,10 +1445,7 @@ function bindExplorer(view: ExplorerView) {
       event.dataTransfer.setData(
         CLIPBOARD_MIME,
         JSON.stringify(
-          buildDescriptorFromEntry(
-            source,
-            preserveCut ? "cut" : "copy",
-          ),
+          buildDescriptorFromEntry(source, preserveCut ? "cut" : "copy"),
         ),
       );
     }
@@ -1455,8 +1478,7 @@ function bindExplorer(view: ExplorerView) {
       view,
       entry: {
         path: row.dataset.path || "",
-        name:
-          row.querySelector(".entry-name, .grid-name")?.textContent || "",
+        name: row.querySelector(".entry-name, .grid-name")?.textContent || "",
         kind: row.dataset.kind as Entry["kind"],
         size: Number(row.dataset.size),
         modified: row.dataset.modified || "",

@@ -1,5 +1,9 @@
 function activeTab(state) {
-    return state.tabs[state.activeTab] ?? { root: state.root, path: state.path, peer: state.peer };
+    return (state.tabs[state.activeTab] ?? {
+        root: state.root,
+        path: state.path,
+        peer: state.peer,
+    });
 }
 function syncActiveTab(state) {
     const tab = state.tabs[state.activeTab];
@@ -680,7 +684,9 @@ function renderTabStrip(view) {
     const activeIdx = view.state.activeTab;
     const buttons = tabs
         .map((tab, idx) => {
-        const label = tab.path === "" ? "/" : tab.path.split("/").filter(Boolean).pop() || "/";
+        const label = tab.path === ""
+            ? "/"
+            : tab.path.split("/").filter(Boolean).pop() || "/";
         const peerTag = tab.peer ? ` · ${tab.peer.glyph}` : "";
         const active = idx === activeIdx ? " tab-active" : "";
         const close = tabs.length > 1
@@ -724,7 +730,11 @@ function openNewTab(view) {
     // with an empty path (root listing). Distinct tabs are usually
     // opened to point at a subfolder, but root is a safe default.
     const current = activeTab(view.state);
-    view.state.tabs.push({ root: current.root, path: "", peer: current.peer ? { ...current.peer } : null });
+    view.state.tabs.push({
+        root: current.root,
+        path: "",
+        peer: current.peer ? { ...current.peer } : null,
+    });
     view.state.activeTab = view.state.tabs.length - 1;
     switchTab(view, view.state.activeTab);
 }
