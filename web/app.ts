@@ -86,7 +86,24 @@ type AppState = {
   rawText: string;
   view: "list" | "grid";
   peer: Peer | null;
+  tabs: ExplorerTab[];
+  activeTab: number;
 };
+type ExplorerTab = {
+  root: number;
+  path: string;
+  peer: Peer | null;
+};
+function activeTab(state: AppState): ExplorerTab {
+  return state.tabs[state.activeTab] ?? { root: state.root, path: state.path, peer: state.peer };
+}
+function syncActiveTab(state: AppState) {
+  const tab = state.tabs[state.activeTab];
+  if (!tab) return;
+  state.root = tab.root;
+  state.path = tab.path;
+  state.peer = tab.peer;
+}
 type ExplorerView = {
   key: string;
   panel: HTMLElement;
@@ -338,6 +355,8 @@ function createExplorerView(key: string, panel: HTMLElement): ExplorerView {
       view:
         localStorage.getItem("eta_directory_view") === "grid" ? "grid" : "list",
       peer: null,
+      tabs: [{ root: 0, path: "", peer: null }],
+      activeTab: 0,
     },
     element: (name: string) => {
       const element = panel.querySelector(`[data-explorer="${name}"]`);
@@ -859,11 +878,89 @@ function renderEntries(view: ExplorerView, entries: Entry[]) {
   iconify();
 }
 
+// renderTabStrip renders the per-Explorer tab bar. Tabs are ordered;
+// drag-to-reorder and click-to-switch are wired by bindExplorer once.
+function renderTabStrip(view: ExplorerView) {
+  const strip = view.element("tab-strip") as HTMLElement;
+  const tabs = view.state.tabs;
+  const activeIdx = view.state.activeTab;
+  const buttons = tabs
+    .map((tab, idx) => {
+      const label = tab.path === "" ? "/" : tab.path.split("/").filter(Boolean).pop() || "/";
+      const peerTag = tab.peer ? ` · ${tab.peer.glyph}` : "";
+      const active = idx === activeIdx ? " tab-active" : "";
+      const close = tabs.length > 1
+        ? `<button class="tab-close" data-tab-close="${idx}" title="Close tab" aria-label="Close tab">×</button>`
+        : "";
+      return `<button class="eta-tab${active}" draggable="true" data-tab="${idx}" role="tab" aria-selected="${idx === activeIdx}" title="${escapeHTML(tab.path || "/")}"><span class="tab-label">${escapeHTML(label)}${escapeHTML(peerTag)}</span>${close}</button>`;
+    })
+    .join("");
+  const newTab = '<button class="eta-tab-new" data-tab-new title="New tab" aria-label="New tab">+</button>';
+  strip.innerHTML = buttons + newTab;
+  iconify();
+}
+
+function switchTab(view: ExplorerView, idx: number) {
+  if (!view.state.tabs[idx]) return;
+  view.state.activeTab = idx;
+  const tab = view.state.tabs[idx];
+  view.state.root = tab.root;
+  view.state.path = tab.path;
+  view.state.peer = tab.peer;
+  (view.element("root-select") as HTMLSelectElement).value = String(tab.root);
+  navigate(view, tab.path);
+}
+
+function closeTab(view: ExplorerView, idx: number) {
+  if (view.state.tabs.length <= 1) return; // always keep at least one
+  const wasActive = idx === view.state.activeTab;
+  view.state.tabs.splice(idx, 1);
+  if (wasActive) {
+    const newActive = Math.min(idx, view.state.tabs.length - 1);
+    switchTab(view, newActive);
+  } else {
+    if (view.state.activeTab > idx) view.state.activeTab--;
+    renderTabStrip(view);
+  }
+}
+
+function openNewTab(view: ExplorerView) {
+  // Clone the active tab so the new one starts at the same root/peer
+  // with an empty path (root listing). Distinct tabs are usually
+  // opened to point at a subfolder, but root is a safe default.
+  const current = activeTab(view.state);
+  view.state.tabs.push({ root: current.root, path: "", peer: current.peer ? { ...current.peer } : null });
+  view.state.activeTab = view.state.tabs.length - 1;
+  switchTab(view, view.state.activeTab);
+}
+
+function reorderTabs(view: ExplorerView, from: number, to: number) {
+  if (from === to) return;
+  const tabs = view.state.tabs;
+  if (from < 0 || from >= tabs.length || to < 0 || to >= tabs.length) return;
+  const [moved] = tabs.splice(from, 1);
+  tabs.splice(to, 0, moved);
+  if (view.state.activeTab === from) {
+    view.state.activeTab = to;
+  } else if (from < view.state.activeTab && to >= view.state.activeTab) {
+    view.state.activeTab--;
+  } else if (from > view.state.activeTab && to <= view.state.activeTab) {
+    view.state.activeTab++;
+  }
+  renderTabStrip(view);
+}
+
+
 async function navigate(view: ExplorerView, path = "") {
   view.state.path = path;
+  // Mirror the new path onto the active tab so opening tabs in this
+  // explorer don't drift from what's actually displayed.
+  const tab = view.state.tabs[view.state.activeTab];
+  if (tab) tab.path = path;
   view.element("entries").innerHTML =
     '<div class="empty"><sl-spinner></sl-spinner></div>';
   renderBreadcrumbs(view);
+  renderTabStrip(view);
   iconify();
   try {
     const result = await api(
@@ -1257,6 +1354,50 @@ function bindExplorer(view: ExplorerView) {
       view.state.view === "grid" ? "Use detailed list" : "Use image grid";
     navigate(view, view.state.path);
   });
+  const strip = view.element("tab-strip") as HTMLElement;
+  // Tab click — focus; close button stops propagation; "+" opens a new tab.
+  strip.addEventListener("click", (event) => {
+    const target = event.target as HTMLElement;
+    if (target.closest("[data-tab-close]")) {
+      const idx = Number(target.closest("[data-tab-close]")!.getAttribute("data-tab-close"));
+      closeTab(view, idx);
+      return;
+    }
+    if (target.closest("[data-tab-new]")) {
+      openNewTab(view);
+      return;
+    }
+    const tab = target.closest("[data-tab]") as HTMLElement | null;
+    if (tab) {
+      const idx = Number(tab.getAttribute("data-tab"));
+      switchTab(view, idx);
+    }
+  });
+  // HTML5 drag-to-reorder within the strip.
+  strip.addEventListener("dragstart", (event) => {
+    const tab = (event.target as HTMLElement).closest("[data-tab]") as HTMLElement | null;
+    if (!tab) return;
+    if (event.dataTransfer) {
+      event.dataTransfer.effectAllowed = "move";
+      event.dataTransfer.setData("text/plain", tab.getAttribute("data-tab") ?? "");
+    }
+  });
+  strip.addEventListener("dragover", (event) => {
+    if (!(event.target as HTMLElement).closest("[data-tab]")) return;
+    event.preventDefault();
+    if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
+  });
+  strip.addEventListener("drop", (event) => {
+    const target = (event.target as HTMLElement).closest("[data-tab]") as HTMLElement | null;
+    if (!target) return;
+    event.preventDefault();
+    const from = Number(event.dataTransfer?.getData("text/plain") ?? "");
+    const to = Number(target.getAttribute("data-tab"));
+    if (Number.isInteger(from) && Number.isInteger(to) && from !== to) {
+      reorderTabs(view, from, to);
+    }
+  });
+  renderTabStrip(view);
   view
     .element("up-button")
     .addEventListener("click", () => navigate(view, parentPath(view)));
