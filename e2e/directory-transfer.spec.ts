@@ -8,7 +8,13 @@
 // transfer coverage; peers.spec.ts only copies a single README into a
 // pre-created destination folder.
 import { expect, test } from "./_setup";
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import { PEER_URL, startPeer } from "./_peer";
 
@@ -31,7 +37,9 @@ test("copying a directory tree delivers nested files intact to a peer @peer", as
     await page.goto("/");
 
     await request.delete(`/api/peers?url=${encodeURIComponent(PEER_URL)}`);
-    const enrolled = await request.post("/api/peers", { data: { url: PEER_URL } });
+    const enrolled = await request.post("/api/peers", {
+      data: { url: PEER_URL },
+    });
     expect(enrolled.ok()).toBeTruthy();
     await page.goto("/");
     await page.locator("#eta-launcher").click();

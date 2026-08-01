@@ -11,7 +11,13 @@
 // The drive uses the local server's filesystem as the fixture:
 // test-results/move-semantics/{src,dst} on the project root.
 import { expect, test, type Locator, type Page } from "./_setup";
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 
 const FIXTURE = join(process.cwd(), "test-results/move-semantics");
@@ -43,9 +49,7 @@ async function openMoveSemantics(
       .first();
     await expect(target).toBeVisible();
     await target.dblclick();
-    await expect(
-      explorer.locator("button.entry").first(),
-    ).toBeVisible();
+    await expect(explorer.locator("button.entry").first()).toBeVisible();
   }
 }
 
@@ -90,9 +94,7 @@ test("successful cut+paste moves a regular file and leaves source removed", asyn
       { timeout: 5_000 },
     )
     .toBe(true);
-  expect(readFileSync(join(FIXTURE, "dst/alpha.md"), "utf8")).toBe(
-    "# alpha\n",
-  );
+  expect(readFileSync(join(FIXTURE, "dst/alpha.md"), "utf8")).toBe("# alpha\n");
 });
 
 test("failing cut+paste leaves the source intact and reports the error", async ({

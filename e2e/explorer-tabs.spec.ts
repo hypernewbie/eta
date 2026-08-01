@@ -10,7 +10,10 @@ import { join } from "node:path";
 
 const FIXTURE = join(process.cwd(), "test-results/explorer-tabs");
 
-async function openExplorer(page: import("@playwright/test").Page, request: import("@playwright/test").APIRequestContext) {
+async function openExplorer(
+  page: import("@playwright/test").Page,
+  request: import("@playwright/test").APIRequestContext,
+) {
   await page.setViewportSize({ width: 1440, height: 900 });
   await request.put("/api/state", { data: { version: 1, windows: [] } });
   await page.goto("/");
@@ -23,7 +26,7 @@ async function openExplorer(page: import("@playwright/test").Page, request: impo
 // given name as a substring; callers should use names that don't
 // collide with subdirectory names.
 function filesIn(explorer: import("@playwright/test").Locator) {
-  return explorer.locator('button.entry.file .entry-name');
+  return explorer.locator("button.entry.file .entry-name");
 }
 function dirRow(explorer: import("@playwright/test").Locator, name: string) {
   return explorer
@@ -106,7 +109,7 @@ test("drag reorders tabs within the strip", async ({ page, request }) => {
       '.winbox.eta-window [data-explorer="tab-strip"]',
     ) as HTMLElement | null;
     if (!strip) throw new Error("strip missing");
-    const tabs = strip.querySelectorAll('[data-tab]');
+    const tabs = strip.querySelectorAll("[data-tab]");
     if (tabs.length < 2) throw new Error("expected at least 2 tabs");
     const dt = new DataTransfer();
     tabs[1]!.dispatchEvent(

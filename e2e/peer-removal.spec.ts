@@ -23,13 +23,17 @@ test("η menu removes a peer once its inventory entry is deleted @peer", async (
     await expect(page.locator('[data-location="local"]')).toBeVisible();
     await expect(page.locator(`[data-location="${PEER_URL}"]`)).toHaveCount(0);
     await page.keyboard.press("Escape");
-    await page.locator("#eta-menu").evaluate((menu) => ((menu as HTMLElement).hidden = true));
+    await page
+      .locator("#eta-menu")
+      .evaluate((menu) => ((menu as HTMLElement).hidden = true));
 
     // Enroll and reload; the peer should appear. (Reload is required
     // until web/app.ts refreshes enrolledPeers on inventory mutation;
     // task A adds the coverage, not the live-refresh behaviour.)
     await request.delete(`/api/peers?url=${encodeURIComponent(PEER_URL)}`);
-    const enrolled = await request.post("/api/peers", { data: { url: PEER_URL } });
+    const enrolled = await request.post("/api/peers", {
+      data: { url: PEER_URL },
+    });
     expect(enrolled.ok()).toBeTruthy();
     await page.goto("/");
 
@@ -37,7 +41,9 @@ test("η menu removes a peer once its inventory entry is deleted @peer", async (
     const peerEntry = page.locator(`[data-location="${PEER_URL}"]`);
     await expect(peerEntry).toBeVisible();
     await page.keyboard.press("Escape");
-    await page.locator("#eta-menu").evaluate((menu) => ((menu as HTMLElement).hidden = true));
+    await page
+      .locator("#eta-menu")
+      .evaluate((menu) => ((menu as HTMLElement).hidden = true));
 
     // Remove and reload; menu should drop back to local-only.
     const removed = await request.delete(

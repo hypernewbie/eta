@@ -21,7 +21,9 @@ test("opening a file in a peer Explorer mounts a peer-accented inspector @peer",
 
     // Enroll the peer and open a peer Explorer through η's Computers menu.
     await request.delete(`/api/peers?url=${encodeURIComponent(PEER_URL)}`);
-    const enrolled = await request.post("/api/peers", { data: { url: PEER_URL } });
+    const enrolled = await request.post("/api/peers", {
+      data: { url: PEER_URL },
+    });
     expect(enrolled.ok()).toBeTruthy();
     await page.goto("/");
     await page.locator("#eta-launcher").click();

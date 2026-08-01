@@ -9,12 +9,22 @@
 // planner path; the journal calls them "another frontend" precisely
 // because the planner is identical.
 import { expect, test } from "./_setup";
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 
 const FIXTURE = join(process.cwd(), "test-results/clipboard-dragdrop");
 
-async function openFixture(explorer: import("@playwright/test").Locator, page: import("@playwright/test").Page, request: import("@playwright/test").APIRequestContext) {
+async function openFixture(
+  explorer: import("@playwright/test").Locator,
+  page: import("@playwright/test").Page,
+  request: import("@playwright/test").APIRequestContext,
+) {
   await page.setViewportSize({ width: 1440, height: 900 });
   await request.put("/api/state", { data: { version: 1, windows: [] } });
   await page.goto("/");
@@ -40,13 +50,17 @@ test("drag/drop a file onto a sibling folder row routes through the same paste p
   const explorer = page.locator(".winbox.eta-window").first();
   await openFixture(explorer, page, request);
 
-  const source = explorer.locator("button.entry.file", {
-    hasText: "dragged.md",
-  }).first();
+  const source = explorer
+    .locator("button.entry.file", {
+      hasText: "dragged.md",
+    })
+    .first();
   await expect(source).toBeVisible();
-  const targetFolder = explorer.locator("button.entry.directory", {
-    hasText: "dst",
-  }).first();
+  const targetFolder = explorer
+    .locator("button.entry.directory", {
+      hasText: "dst",
+    })
+    .first();
   await expect(targetFolder).toBeVisible();
 
   // Drive the drag via programmatic event dispatch. Playwright's
@@ -58,7 +72,10 @@ test("drag/drop a file onto a sibling folder row routes through the same paste p
     async ({ sourceSel, targetSel }) => {
       const source = document.querySelector(sourceSel);
       const target = document.querySelector(targetSel);
-      if (!(source instanceof HTMLElement) || !(target instanceof HTMLElement)) {
+      if (
+        !(source instanceof HTMLElement) ||
+        !(target instanceof HTMLElement)
+      ) {
         return { ok: false, reason: "elements not found" };
       }
       const rect = target.getBoundingClientRect();
@@ -145,9 +162,7 @@ test("copied descriptor survives a page reload via localStorage", async ({
   );
 
   await page.reload();
-  await expect(
-    page.locator(".winbox.eta-window").first(),
-  ).toBeVisible();
+  await expect(page.locator(".winbox.eta-window").first()).toBeVisible();
 
   const after = await page.evaluate(() =>
     window.localStorage.getItem("eta.clipboard"),
@@ -191,7 +206,10 @@ test("dragging a cut item preserves the cut operation through the drop", async (
     async ({ sourceSel, targetSel }) => {
       const source = document.querySelector(sourceSel);
       const target = document.querySelector(targetSel);
-      if (!(source instanceof HTMLElement) || !(target instanceof HTMLElement)) {
+      if (
+        !(source instanceof HTMLElement) ||
+        !(target instanceof HTMLElement)
+      ) {
         return { ok: false };
       }
       const rect = target.getBoundingClientRect();
@@ -224,8 +242,8 @@ test("dragging a cut item preserves the cut operation through the drop", async (
       return { ok: true };
     },
     {
-      sourceSel: 'button.entry.file',
-      targetSel: 'button.entry.directory',
+      sourceSel: "button.entry.file",
+      targetSel: "button.entry.directory",
     },
   );
   expect(result.ok).toBe(true);

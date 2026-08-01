@@ -81,31 +81,59 @@ test("enrolled peer opens as a source-aware remote Explorer @peer", async ({
 
     const remoteExplorer = page.locator(".winbox.peer-window");
     await expect(remoteExplorer).toHaveCount(1);
-    await expect(remoteExplorer.getByText("remote.txt", { exact: true })).toBeVisible();
-    await remoteExplorer.getByText("destination", { exact: true }).click({ button: "right" });
+    await expect(
+      remoteExplorer.getByText("remote.txt", { exact: true }),
+    ).toBeVisible();
+    await remoteExplorer
+      .getByText("destination", { exact: true })
+      .click({ button: "right" });
     await page.locator('[data-file-action="terminal"]').click();
     const remoteTerminal = page.locator(".winbox.peer-window").last();
-    await expect(remoteTerminal.locator(".terminal-xterm .xterm")).toBeVisible();
+    await expect(
+      remoteTerminal.locator(".terminal-xterm .xterm"),
+    ).toBeVisible();
     await remoteTerminal.locator(".wb-close").click({ force: true });
 
-    const localExplorer = page.locator(".winbox.eta-window:not(.peer-window)").last();
-    await page.locator('#task-strip .task-window[data-window^="explorer:"]').first().click();
-    await localExplorer.getByText("README.md", { exact: true }).click({ button: "right" });
+    const localExplorer = page
+      .locator(".winbox.eta-window:not(.peer-window)")
+      .last();
+    await page
+      .locator('#task-strip .task-window[data-window^="explorer:"]')
+      .first()
+      .click();
+    await localExplorer
+      .getByText("README.md", { exact: true })
+      .click({ button: "right" });
     await page.locator('[data-file-action="copy"]').click();
-    await page.locator('#task-strip .task-window[data-window^="explorer:"]').last().click();
-    await remoteExplorer.getByText("destination", { exact: true }).click({ button: "right" });
+    await page
+      .locator('#task-strip .task-window[data-window^="explorer:"]')
+      .last()
+      .click();
+    await remoteExplorer
+      .getByText("destination", { exact: true })
+      .click({ button: "right" });
     await page.locator('[data-file-action="paste"]').click();
     const copyTask = page.locator(".copy-task");
     await expect(copyTask).toContainText("Copy README.md");
     await page.waitForTimeout(750);
     const copyError = await copyTask.getAttribute("title");
     if (copyError) throw new Error(`copy task failed: ${copyError}`);
-    await expect.poll(() => existsSync(join(peerDir, "destination", "README.md")), { timeout: 10_000 }).toBeTruthy();
+    await expect
+      .poll(() => existsSync(join(peerDir, "destination", "README.md")), {
+        timeout: 10_000,
+      })
+      .toBeTruthy();
     await remoteExplorer.getByText("destination", { exact: true }).dblclick();
-    await expect(remoteExplorer.getByText("README.md", { exact: true })).toBeVisible();
+    await expect(
+      remoteExplorer.getByText("README.md", { exact: true }),
+    ).toBeVisible();
     await remoteExplorer.locator(".wb-close").click({ force: true });
   } finally {
-    try { await request.delete(`/api/peers?url=${encodeURIComponent(peerURL)}`); } catch { /* test timeout/teardown */ }
+    try {
+      await request.delete(`/api/peers?url=${encodeURIComponent(peerURL)}`);
+    } catch {
+      /* test timeout/teardown */
+    }
     if (peer.pid) process.kill(-peer.pid, "SIGTERM");
     rmSync(peerDir, { recursive: true, force: true });
     rmSync(peerCacheDir, { recursive: true, force: true });
