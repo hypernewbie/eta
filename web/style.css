@@ -344,6 +344,20 @@ svg.file-type-icon {
   display: block;
   flex: 0 0 18px;
 }
+/* Selection has to survive hover and read clearly against it, so it is
+   an accent wash plus a marker rail rather than a slightly lighter row. */
+.entry.is-selected {
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+.entry.is-selected .entry-name {
+  color: var(--text-primary);
+}
+.entry.grid-entry.is-selected {
+  box-shadow:
+    inset 0 0 0 1px var(--accent),
+    0 0 12px var(--accent-glow);
+}
 .entry.directory .entry-icon,
 .entry.parent .entry-icon {
   color: var(--accent);

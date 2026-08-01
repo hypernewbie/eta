@@ -1019,6 +1019,8 @@ function updateSelectionInfo(view: ExplorerView) {
     : "";
 }
 function renderEntries(view: ExplorerView, entries: Entry[]) {
+  // Rows are rebuilt here, so any previous highlight is gone with them.
+  view.state.selected = null;
   renderStatusBar(view, entries);
   const container = view.element("entries");
   view
@@ -1783,7 +1785,59 @@ function bindExplorer(view: ExplorerView) {
     menu.hidden = false;
     iconify();
   });
-  view.element("entries").addEventListener("dblclick", (event) => {
+  // Single click selects, double click opens: the split every file
+  // manager uses. Entries previously had no click handler at all, so
+  // nothing was ever selected and the only way to touch a file was to
+  // open it or right-click it.
+  const entries = view.element("entries");
+  entries.addEventListener("click", (event) => {
+    const row = (event.target as HTMLElement).closest(
+      ".entry",
+    ) as HTMLElement | null;
+    if (!row) {
+      selectEntry(view, null);
+      return;
+    }
+    // Ctrl/Cmd-click on the selected row clears it, so a selection can
+    // be undone without hunting for empty space.
+    const modified = event.ctrlKey || event.metaKey;
+    selectEntry(
+      view,
+      modified && row.classList.contains("is-selected") ? null : row,
+    );
+  });
+  entries.addEventListener("keydown", (event) => {
+    const key = event.key;
+    if (key === "Escape") {
+      selectEntry(view, null);
+      return;
+    }
+    if (key !== "ArrowDown" && key !== "ArrowUp") return;
+    // Arrow keys walk the list and carry the selection with them, rather
+    // than only moving focus and leaving the selection behind.
+    event.preventDefault();
+    const rows = [...entries.querySelectorAll<HTMLElement>(".entry")];
+    if (!rows.length) return;
+    const current = rows.findIndex((row) =>
+      row.classList.contains("is-selected"),
+    );
+    const next =
+      key === "ArrowDown"
+        ? Math.min(current + 1, rows.length - 1)
+        : Math.max(current - 1, 0);
+    const target = rows[current === -1 ? 0 : next];
+    target.focus();
+    selectEntry(view, target);
+  });
+  // Right-click acts on the row it opened over, so the menu and the
+  // highlight cannot disagree about the target.
+  entries.addEventListener("contextmenu", (event) => {
+    const row = (event.target as HTMLElement).closest(
+      ".entry",
+    ) as HTMLElement | null;
+    if (row) selectEntry(view, row);
+  });
+  entries.addEventListener("dblclick", (event) => {
     const row = (event.target as HTMLElement).closest(
       ".entry",
     ) as HTMLElement | null;
@@ -1792,15 +1846,34 @@ function bindExplorer(view: ExplorerView) {
       navigate(view, parentPath(view));
       return;
     }
-    const item: Entry = {
-      path: row.dataset.path || "",
-      name: row.querySelector(".entry-name, .grid-name")?.textContent || "",
-      kind: row.dataset.kind as Entry["kind"],
-      size: Number(row.dataset.size),
-      modified: row.dataset.modified || "",
-    };
+    const item = entryFromRow(row);
     item.kind === "directory" ? navigate(view, item.path) : preview(view, item);
   });
+}
+function entryFromRow(row: HTMLElement): Entry {
+  return {
+    path: row.dataset.path || "",
+    name: row.querySelector(".entry-name, .grid-name")?.textContent || "",
+    kind: row.dataset.kind as Entry["kind"],
+    size: Number(row.dataset.size),
+    modified: row.dataset.modified || "",
+  };
+}
+function selectEntry(view: ExplorerView, row: HTMLElement | null) {
+  const container = view.element("entries");
+  container.querySelectorAll(".entry.is-selected").forEach((entry) => {
+    entry.classList.remove("is-selected");
+    entry.setAttribute("aria-selected", "false");
+  });
+  // ".." is a navigation control, not a file you can act on.
+  if (row && !row.dataset.parent) {
+    row.classList.add("is-selected");
+    row.setAttribute("aria-selected", "true");
+    view.state.selected = entryFromRow(row);
+  } else {
+    view.state.selected = null;
+  }
+  updateSelectionInfo(view);
 }
 
 async function initializeExplorer(
