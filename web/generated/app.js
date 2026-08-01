@@ -309,6 +309,8 @@ function setTheme(name, persist = true) {
     document.documentElement.style.setProperty("--identity-accent", theme.accent);
     document.documentElement.style.setProperty("--identity-glow", theme.accentGlow);
     document.documentElement.style.setProperty("--identity-bright", theme.accentBright);
+    // Repaint the tab icon so switching swatch recolours it immediately.
+    updateFavicon();
     if (persist)
         localStorage.setItem("eta_theme_color", name);
 }
@@ -342,7 +344,9 @@ async function loadLocalHost() {
     $("#hostname-display").textContent = identity.hostname.toUpperCase();
     // Tab title names the machine, matching phi's "<glyph> <host>". The
     // static "eta" told you nothing when several boxes were open.
-    document.title = `η ${identity.hostname.toLowerCase()}`;
+    // Hostnames are UPPERCASE everywhere in eta.
+    document.title = `η ${identity.hostname.toUpperCase()}`;
+    updateFavicon();
 }
 function iconify() {
     window.lucide?.createIcons({ attrs: { "stroke-width": 1.65 } });
@@ -1539,6 +1543,31 @@ async function initializeExplorer(view, restored) {
 // "READ ONLY" was simply false — eta copies, moves and deletes — and
 // "CONNECTED" was hardcoded markup that only ever changed on failure.
 // The header now says nothing until something is actually wrong.
+// Favicon is drawn rather than shipped, the way phi does it: a rounded
+// tile in the identity accent with the app glyph, so a row of pinned
+// tabs is told apart by machine colour instead of by hovering them.
+function updateFavicon() {
+    const style = getComputedStyle(document.documentElement);
+    const accent = style.getPropertyValue("--identity-accent").trim() || "#7c6af7";
+    const glow = style.getPropertyValue("--identity-glow").trim() || accent;
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">` +
+        `<defs><radialGradient id="g" cx="50%" cy="50%" r="50%">` +
+        `<stop offset="0%" stop-color="${accent}"/>` +
+        `<stop offset="100%" stop-color="${glow}"/>` +
+        `</radialGradient></defs>` +
+        `<rect width="32" height="32" rx="8" fill="url(#g)"/>` +
+        `<text x="50%" y="61%" font-family="system-ui, -apple-system, sans-serif" ` +
+        `font-size="21" font-weight="bold" fill="#fff" text-anchor="middle" ` +
+        `dominant-baseline="middle">η</text></svg>`;
+    let link = document.querySelector('link[rel="icon"]');
+    if (!link) {
+        link = document.createElement("link");
+        link.rel = "icon";
+        document.head.append(link);
+    }
+    link.type = "image/svg+xml";
+    link.href = "data:image/svg+xml;utf8," + encodeURIComponent(svg);
+}
 function setServerOffline(offline) {
     const status = $("#header-status");
     status.hidden = !offline;
