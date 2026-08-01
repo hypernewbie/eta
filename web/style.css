@@ -1231,6 +1231,13 @@ svg.file-type-icon {
 .winbox.min {
   display: none;
 }
+/* WinBox ships a fullscreen control beside maximize. Maximize already
+   fills the desktop, and the browser's own fullscreen is a keystroke
+   away, so the third button only offers a state the taskbar cannot
+   represent and the window cannot be dragged out of. */
+.winbox .wb-full {
+  display: none;
+}
 .wb-body {
   background:
     radial-gradient(ellipse at 50% 0%, var(--accent-trace), transparent 44%),
