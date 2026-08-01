@@ -229,6 +229,14 @@ func main() {
 	// ones we can actually attempt to retry.
 	go s.resumePendingJobs(context.Background())
 
+	// Sweep stale tree-transfer staging on startup and then hourly.
+	// Without this, a sender that crashed mid-resume leaves its
+	// receiver-side staging tree orphaned under {root}/.eta/staging/.
+	// TreeStore.Sweep was implemented and tested but never wired
+	// into the server lifecycle, so the orphans accumulated until
+	// the disk filled.
+	go s.sweepStaleTreeSessions(context.Background())
+
 	httpServer := &http.Server{
 		Handler:           s.routes(),
 		ReadHeaderTimeout: 10 * time.Second,
@@ -709,6 +717,45 @@ func (s *server) handleTransferSend(w http.ResponseWriter, r *http.Request) {
 		s.transferJobs.Finish(job.ID, transferErr)
 	}()
 	writeJSON(w, http.StatusAccepted, job)
+}
+
+// sweepStaleTreeSessions removes abandoned tree-transfer staging
+// directories on every root. Runs immediately on startup so any
+// orphans from a previous process are cleaned before the next
+// sender attempt, then loops once an hour. Stale = no Touch in
+// the last 24 hours, matching the test threshold in
+// internal/transfer/treestore_test.go.
+//
+// Sweep is best-effort; a single failure logs and continues so
+// one bad root can't stop the others from being cleaned.
+func (s *server) sweepStaleTreeSessions(ctx context.Context) {
+	const ttl = 24 * time.Hour
+	sweep := func() {
+		for _, store := range s.treeStores {
+			if store == nil {
+				continue
+			}
+			n, err := store.Sweep(ttl, time.Now())
+			if err != nil {
+				log.Printf("tree sweep: %v", err)
+				continue
+			}
+			if n > 0 {
+				log.Printf("tree sweep: removed %d stale session(s)", n)
+			}
+		}
+	}
+	sweep()
+	ticker := time.NewTicker(1 * time.Hour)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			sweep()
+		}
+	}
 }
 
 // resumePendingJobs kicks off a retry goroutine for each non-done

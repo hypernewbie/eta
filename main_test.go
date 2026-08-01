@@ -495,3 +495,48 @@ func TestTargetStaysWithinConfiguredRoot(t *testing.T) {
 		t.Fatalf("symlink escape status = %d, want 400", got)
 	}
 }
+
+// Pins the sweep wiring in main.go. Without this test, a future
+// refactor that drops the startup-time sweep leaves abandoned
+// .eta/staging dirs accumulating on the receiver until the disk
+// fills.
+//
+// Simulates an orphan by writing a staging directory under
+// .eta/staging/ without a matching intent record — the same state
+// a crashed mid-transfer sender leaves behind. The sweep should
+// remove it on its startup pass.
+func TestSweepStaleTreeSessionsRemovesOrphans(t *testing.T) {
+	root := t.TempDir()
+	server, err := newServer([]string{root})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(server.treeStores) != 1 {
+		t.Fatalf("treeStores = %d, want 1", len(server.treeStores))
+	}
+
+	orphanID := "orphan-" + time.Now().Format("150405.000000")
+	orphanPath := filepath.Join(root, ".eta", "staging", orphanID)
+	if err := os.MkdirAll(orphanPath, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(orphanPath); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go server.sweepStaleTreeSessions(ctx)
+
+	// Wait up to 2 seconds for the startup sweep to remove the
+	// orphan. The startup sweep runs synchronously inside the
+	// goroutine, so the only delay is scheduling.
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, err := os.Stat(orphanPath); os.IsNotExist(err) {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("orphan staging %q not swept within 2s", orphanPath)
+}
