@@ -1318,8 +1318,16 @@ async function openTerminal(view: ExplorerView, entry: Entry) {
     const base = window.location.origin || "";
     while (!stopped) {
       try {
+        // Must go through terminalURL: a peer's session lives on that
+        // peer, so a hardcoded /api/terminals path asks the local
+        // instance for an id it has never heard of. Input and resize
+        // already routed correctly, so a remote terminal accepted
+        // keystrokes and never showed a byte of output.
         const response = await fetch(
-          `${base}/api/terminals/${encodeURIComponent(created.id)}/stream?offset=${offset}`,
+          base +
+            terminalURL(view, created.id, "stream", {
+              offset: String(offset),
+            }),
           { headers: { Accept: "text/event-stream" } },
         );
         if (!response.body || !response.ok) {

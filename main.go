@@ -332,6 +332,7 @@ func (s *server) routes() http.Handler {
 	mux.HandleFunc("DELETE /api/terminals/{id}", s.handleTerminalClose)
 	mux.HandleFunc("POST /api/remote/terminals", s.handleRemoteTerminalStart)
 	mux.HandleFunc("GET /api/remote/terminals/{id}", s.handleRemoteTerminalOutput)
+	mux.HandleFunc("GET /api/remote/terminals/{id}/stream", s.handleRemoteTerminalStream)
 	mux.HandleFunc("POST /api/remote/terminals/{id}/input", s.handleRemoteTerminalInput)
 	mux.HandleFunc("POST /api/remote/terminals/{id}/resize", s.handleRemoteTerminalResize)
 	mux.HandleFunc("DELETE /api/remote/terminals/{id}", s.handleRemoteTerminalClose)
@@ -588,6 +589,13 @@ func (s *server) handleRemoteTerminalStart(w http.ResponseWriter, r *http.Reques
 func (s *server) handleRemoteTerminalOutput(w http.ResponseWriter, r *http.Request) {
 	s.proxyRemoteTerminal(w, r, "/api/terminals/"+url.PathEscape(r.PathValue("id")))
 }
+// The terminal stream is long-lived and must not be buffered or timed
+// out like the request/response endpoints: proxyRemoteTerminal uses a
+// 10s client and a plain io.Copy, which would cut a working terminal
+// off after ten seconds and withhold output until then anyway.
+func (s *server) handleRemoteTerminalStream(w http.ResponseWriter, r *http.Request) {
+	s.streamRemoteTerminal(w, r, "/api/terminals/"+url.PathEscape(r.PathValue("id"))+"/stream")
+}
 func (s *server) handleRemoteTerminalInput(w http.ResponseWriter, r *http.Request) {
 	s.proxyRemoteTerminal(w, r, "/api/terminals/"+url.PathEscape(r.PathValue("id"))+"/input")
 }
@@ -641,6 +649,71 @@ func (s *server) proxyRemoteTerminal(w http.ResponseWriter, r *http.Request, rou
 	}
 	w.WriteHeader(response.StatusCode)
 	_, _ = io.Copy(w, response.Body)
+}
+
+func (s *server) streamRemoteTerminal(w http.ResponseWriter, r *http.Request, route string) {
+	if s.peers == nil {
+		writeError(w, errors.New("peer inventory is unavailable"))
+		return
+	}
+	peer, found, err := s.peers.Find(r.URL.Query().Get("peer"))
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	if !found {
+		writeError(w, errors.New("unknown peer"))
+		return
+	}
+	remote, err := url.Parse(peer.URL)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	target := *remote
+	target.Path = route
+	query := url.Values{}
+	if offset := r.URL.Query().Get("offset"); offset != "" {
+		query.Set("offset", offset)
+	}
+	target.RawQuery = query.Encode()
+	// No client timeout: the stream stays open for the life of the
+	// terminal. The request context ends it when the browser goes away.
+	request, err := http.NewRequestWithContext(r.Context(), http.MethodGet, target.String(), nil)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	request.Header.Set("Accept", "text/event-stream")
+	response, err := (&http.Client{}).Do(request)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	defer response.Body.Close()
+	if contentType := response.Header.Get("Content-Type"); contentType != "" {
+		w.Header().Set("Content-Type", contentType)
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(response.StatusCode)
+	flusher, _ := w.(http.Flusher)
+	buffer := make([]byte, 4<<10)
+	for {
+		n, readErr := response.Body.Read(buffer)
+		if n > 0 {
+			if _, writeErr := w.Write(buffer[:n]); writeErr != nil {
+				return
+			}
+			// Without this the events sit in the response buffer and the
+			// remote terminal appears frozen.
+			if flusher != nil {
+				flusher.Flush()
+			}
+		}
+		if readErr != nil {
+			return
+		}
+	}
 }
 
 func (s *server) terminalSession(w http.ResponseWriter, r *http.Request, action func(*terminal.Session)) {

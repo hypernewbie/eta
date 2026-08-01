@@ -16,6 +16,7 @@ import (
 
 	"github.com/hypernewbie/eta/internal/diskcache"
 	"github.com/hypernewbie/eta/internal/peers"
+	"github.com/hypernewbie/eta/internal/terminal"
 	"github.com/hypernewbie/eta/internal/transfer"
 	"github.com/hypernewbie/eta/internal/uistate"
 )
@@ -570,4 +571,75 @@ func TestSweepStaleTreeSessionsRemovesOrphans(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 	}
 	t.Fatalf("orphan staging %q not swept within 2s", orphanPath)
+}
+
+// A peer's terminal session lives on the peer, so the browser must be
+// able to stream its output through the coordinator. Without a remote
+// stream route the client asked the local instance for an id it had
+// never created, and a remote terminal accepted keystrokes while
+// showing nothing.
+func TestRemoteTerminalStreamsPeerOutput(t *testing.T) {
+	coordinator, err := newServer([]string{t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	remoteRoot := t.TempDir()
+	receiver, err := newServer([]string{remoteRoot})
+	if err != nil {
+		t.Fatal(err)
+	}
+	receiver.terminals = terminal.NewManager()
+	peer := httptest.NewServer(receiver.routes())
+	defer peer.Close()
+	coordinator.peers = peers.New(filepath.Join(t.TempDir(), "peers.json"))
+	if err := coordinator.peers.Add(peers.Peer{URL: peer.URL}); err != nil {
+		t.Fatal(err)
+	}
+
+	start := httptest.NewRecorder()
+	coordinator.routes().ServeHTTP(start, httptest.NewRequest(
+		"POST", "/api/remote/terminals?peer="+url.QueryEscape(peer.URL),
+		bytes.NewBufferString(`{"root":0,"path":"","columns":80,"rows":24}`)))
+	if start.Code != http.StatusCreated {
+		t.Fatalf("start=%d %s", start.Code, start.Body.String())
+	}
+	var created struct {
+		ID string `json:"id"`
+	}
+	if err := json.NewDecoder(start.Body).Decode(&created); err != nil {
+		t.Fatal(err)
+	}
+	if created.ID == "" {
+		t.Fatal("remote terminal returned no id")
+	}
+
+	session, found := receiver.terminals.Get(created.ID)
+	if !found {
+		t.Fatal("session was not created on the peer")
+	}
+	if err := session.Input([]byte("echo eta-remote-marker\n")); err != nil {
+		t.Fatal(err)
+	}
+
+	// The stream is long-lived, so read it with a deadline and stop at
+	// the marker rather than waiting for the body to end.
+	streamed := make(chan string, 1)
+	go func() {
+		response := httptest.NewRecorder()
+		request := httptest.NewRequest("GET",
+			"/api/remote/terminals/"+created.ID+"/stream?offset=0&peer="+url.QueryEscape(peer.URL), nil)
+		ctx, cancel := context.WithTimeout(request.Context(), 4*time.Second)
+		defer cancel()
+		coordinator.routes().ServeHTTP(response, request.WithContext(ctx))
+		streamed <- response.Body.String()
+	}()
+
+	select {
+	case body := <-streamed:
+		if !strings.Contains(body, "eta-remote-marker") {
+			t.Fatalf("peer output never reached the coordinator: %q", body)
+		}
+	case <-time.After(6 * time.Second):
+		t.Fatal("remote terminal stream produced nothing")
+	}
 }
