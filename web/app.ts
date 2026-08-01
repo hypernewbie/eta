@@ -987,9 +987,35 @@ function gridEntryMarkup(view: ExplorerView, entry: Entry) {
     : `<span class="grid-icon"><i data-lucide="${entry.kind === "directory" ? "folder" : "file"}"></i></span>`;
   return `<button class="entry grid-entry ${entry.kind}" data-path="${escapeHTML(entry.path)}" data-kind="${entry.kind}" data-size="${entry.size}" data-modified="${entry.modified}">${visual}<span class="grid-name">${escapeHTML(entry.name)}</span><span class="grid-meta">${entry.kind === "directory" ? "Folder" : bytes(entry.size)}</span></button>`;
 }
+// A bare item count is the least a status bar can say. Report the
+// folder/file split and the size on disk of what is listed, which is
+// what you actually want to know before copying a directory around.
+function renderStatusBar(view: ExplorerView, entries: Entry[]) {
+  const folders = entries.filter((entry) => entry.kind === "directory").length;
+  const files = entries.length - folders;
+  const total = entries.reduce(
+    (sum, entry) => (entry.kind === "file" ? sum + entry.size : sum),
+    0,
+  );
+  const parts: string[] = [];
+  if (folders) parts.push(`${folders} ${folders === 1 ? "folder" : "folders"}`);
+  if (files) parts.push(`${files} ${files === 1 ? "file" : "files"}`);
+  view.element("item-count").textContent = parts.length
+    ? parts.join(", ")
+    : "empty folder";
+  // Directories report no meaningful size here, so this is the size of
+  // the files in view, not of the tree beneath it.
+  view.element("total-size").textContent = files ? bytes(total) : "";
+  updateSelectionInfo(view);
+}
+function updateSelectionInfo(view: ExplorerView) {
+  const entry = view.state.selected;
+  view.element("selection-info").textContent = entry
+    ? `${entry.name} — ${entry.kind === "directory" ? "folder" : bytes(entry.size)}`
+    : "";
+}
 function renderEntries(view: ExplorerView, entries: Entry[]) {
-  view.element("item-count").textContent =
-    `${entries.length} ${entries.length === 1 ? "item" : "items"}`;
+  renderStatusBar(view, entries);
   const container = view.element("entries");
   view
     .element("file-table")
@@ -1463,6 +1489,7 @@ async function openInspector(
 
 async function preview(view: ExplorerView, entry: Entry) {
   view.state.selected = entry;
+  updateSelectionInfo(view);
   view.state.rawText = "";
   if (desktopEnabled()) {
     await openInspector(view, entry);
