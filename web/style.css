@@ -1406,34 +1406,73 @@ body.windowed {
   background: var(--window-accent);
   box-shadow: 0 0 10px var(--window-accent);
 }
-/* Only the focused window wears the host accent. Previously every
-   window did — same rail, same glowing underline, same bright title —
-   so focus was carried by a box-shadow alone, which is close to
-   invisible against a dark desktop. An unfocused window now reads as
-   asleep: neutral edge, grey title, no accent, and a body pulled back
-   in brightness and saturation. */
-.identity-window.focus .wb-title {
+/* Focus and identity are different questions, and must not share a
+   channel. Focus is intensity: glow, contrast, a lit body. Identity is
+   hue: which PC this window belongs to. An earlier version conveyed
+   focus by draining the accent out of unfocused windows, which answered
+   "is this active" by destroying the answer to "where is this from" —
+   with several machines open, every idle window looked alike.
+
+   So an unfocused window keeps its host colour and only loses its
+   energy: the title holds the hue at lower intensity, the rail stays
+   visible but stops glowing, and the body dims. */
+.identity-window .wb-title {
   color: var(--window-accent, var(--accent-bright));
 }
 .winbox:not(.focus) .wb-title {
-  color: var(--text-muted);
+  color: color-mix(in srgb, var(--accent-bright) 55%, var(--text-dim));
   text-shadow: none;
 }
+.identity-window:not(.focus) .wb-title {
+  color: color-mix(
+    in srgb,
+    var(--window-accent, var(--accent-bright)) 58%,
+    var(--text-dim)
+  );
+}
 .winbox:not(.focus) .wb-header {
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.02), transparent);
+  background: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--window-accent, var(--accent)) 6%, transparent),
+    transparent 40%
+  );
 }
 .winbox:not(.focus) .wb-header::before {
-  opacity: 0;
+  opacity: 0.42;
+  box-shadow: none;
 }
 .winbox:not(.focus) .wb-header::after {
-  opacity: 0.12;
+  opacity: 0.22;
   box-shadow: none;
 }
 .winbox:not(.focus) .wb-body {
-  filter: saturate(0.82) brightness(0.88);
+  filter: saturate(0.9) brightness(0.9);
+}
+/* The focused window is the lit one: full accent edge and glow. */
+.winbox.identity-window.focus {
+  box-shadow:
+    0 26px 90px rgba(0, 0, 0, 0.68),
+    0 0 52px color-mix(in srgb, var(--window-accent) 18%, transparent),
+    inset 0 1px 0 color-mix(in srgb, var(--window-accent) 16%, white 8%);
+}
+.winbox.focus {
+  border-color: var(--accent-edge);
+  box-shadow:
+    0 26px 90px rgba(0, 0, 0, 0.68),
+    0 0 52px var(--accent-soft),
+    inset 0 1px 0 color-mix(in srgb, var(--accent) 18%, white 8%);
+}
+.winbox.identity-window.focus {
+  border-color: color-mix(in srgb, var(--window-accent) 55%, transparent);
 }
 .winbox:not(.focus) {
-  border-color: rgba(255, 255, 255, 0.06);
+  /* Tinted by the owning machine rather than a neutral grey, so the
+     frame still identifies the PC at a glance. */
+  border-color: color-mix(
+    in srgb,
+    var(--window-accent, var(--accent)) 20%,
+    transparent
+  );
   box-shadow: 0 10px 30px rgba(0, 0, 0, 0.42);
 }
 .winbox {
@@ -1456,19 +1495,6 @@ body.windowed {
   .winbox .wb-title {
     transition: none;
   }
-}
-.winbox.identity-window.focus {
-  box-shadow:
-    0 26px 90px rgba(0, 0, 0, 0.68),
-    0 0 52px color-mix(in srgb, var(--window-accent) 18%, transparent),
-    inset 0 1px 0 color-mix(in srgb, var(--window-accent) 16%, white 8%);
-}
-.winbox.focus {
-  border-color: var(--accent-edge);
-  box-shadow:
-    0 26px 90px rgba(0, 0, 0, 0.68),
-    0 0 52px var(--accent-soft),
-    inset 0 1px 0 color-mix(in srgb, var(--accent) 18%, white 8%);
 }
 .wb-header {
   position: relative;

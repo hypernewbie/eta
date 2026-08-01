@@ -2118,16 +2118,10 @@ async function boot() {
       enrolledPeers = [];
     }
     await loadCopyTasks();
-    window.setInterval(
-      () => void refreshPeerIdentities(),
-      PEER_IDENTITY_POLL_MS,
-    );
-    // A tab left open in the background is the common case for this;
-    // catch up the moment it is looked at again rather than waiting out
-    // the interval.
-    document.addEventListener("visibilitychange", () => {
-      if (!document.hidden) void refreshPeerIdentities();
-    });
+    // Deliberately not awaited: the probe waits on every peer, and a PC
+    // that is switched off must not hold up the desktop. Colours correct
+    // themselves a moment after load instead.
+    void refreshPeerIdentities();
     const restored = await loadDesktopState();
     restoringDesktop = true;
     const explorers = restored.filter((window) => window.kind === "explorer");
@@ -2582,11 +2576,11 @@ type TmuxHost = {
   available: boolean;
   reachable: boolean;
 };
-// A PC can be renamed or recoloured while this desktop is open. The
-// server re-probes peers behind each list call, so polling picks the
-// new identity up; without this the peer keeps the colour and name it
-// had when it was enrolled, on every surface here, forever.
-const PEER_IDENTITY_POLL_MS = 20_000;
+// A PC can be renamed or recoloured after it was enrolled, and the
+// inventory holds a copy taken at enrolment. This re-reads it once per
+// page load: ?refresh=1 makes the server probe every peer and answer
+// with the result. Not polled — identity changes are rare, and probing
+// on a timer would mean a burst of requests to every PC forever.
 function peerIdentityFingerprint(list: Peer[]) {
   return list
     .map((peer) => `${peer.url}|${peer.name}|${peer.accent}|${peer.glyph}`)
@@ -2596,7 +2590,7 @@ async function refreshPeerIdentities() {
   if (!desktopEnabled()) return;
   let latest: Peer[];
   try {
-    latest = await api("/api/peers");
+    latest = await api("/api/peers?refresh=1");
   } catch {
     return;
   }
