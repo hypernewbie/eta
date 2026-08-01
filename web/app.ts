@@ -607,7 +607,7 @@ function refreshTaskStrip() {
     ]
       .filter(Boolean)
       .join(" ");
-    return `<sl-button size="small" class="${state}" style="--window-accent:${escapeHTML(windowAccent(item.peer))}" data-window="${escapeHTML(key)}" title="${escapeHTML(item.title)}" aria-label="${escapeHTML(item.title)}"><i data-lucide="${icon}"></i><span class="visually-hidden">${escapeHTML(item.title)}</span></sl-button>`;
+    return `<sl-button size="small" class="${state}" style="--window-accent:${escapeHTML(windowAccent(item.peer))}" data-window="${escapeHTML(key)}" title="${escapeHTML(item.title)}" aria-label="${escapeHTML(item.title)}"><i data-lucide="${icon}"></i><span class="task-window-label">${escapeHTML(item.title)}</span></sl-button>`;
   });
   taskStrip.innerHTML = [...windows, ...copies].join("");
   refreshEtaMenu();

@@ -18,7 +18,7 @@ test("taskbar closes and reopens Explorer", async ({ page }) => {
   await expect(explorerTask).toHaveCount(1);
   await expect(explorerTask).toHaveAttribute("title", /Explorer/);
   const explorerTaskBox = await explorerTask.boundingBox();
-  expect(explorerTaskBox?.width).toBeLessThanOrEqual(34);
+  expect(explorerTaskBox?.width).toBeGreaterThanOrEqual(132);
 
   await explorer.locator(".wb-close").click();
   await expect(explorer).toHaveCount(0);
