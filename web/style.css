@@ -996,6 +996,140 @@ svg.file-type-icon {
   color: var(--identity-accent);
   outline: 0;
 }
+/* Tray: clock and volume, pinned to the right of the taskbar. */
+.tray {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 2px;
+  margin-left: auto;
+  padding: 0 6px 0 8px;
+  border-left: 1px solid var(--bg-border);
+}
+.tray-button {
+  display: grid;
+  width: 30px;
+  height: 30px;
+  place-items: center;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+.tray-button svg {
+  width: 16px;
+  height: 16px;
+}
+.tray-button:hover,
+.tray-clock:hover {
+  border-color: color-mix(in srgb, var(--identity-accent) 26%, transparent);
+  background: color-mix(in srgb, var(--identity-accent) 10%, transparent);
+  color: var(--text-primary);
+}
+/* Two lines, time over date, as a desktop taskbar does — it fits the
+   40px bar and puts the thing you glance at most on top. */
+.tray-clock {
+  display: grid;
+  justify-items: end;
+  gap: 1px;
+  padding: 3px 8px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-primary);
+  cursor: default;
+  font-family: var(--font-mono);
+  line-height: 1;
+}
+.tray-time {
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.tray-date {
+  color: var(--text-dim);
+  font-size: 9px;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.04em;
+}
+.volume-popover {
+  position: fixed;
+  z-index: 10002;
+  right: 8px;
+  bottom: 46px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--bg-border);
+  border-radius: 10px;
+  background: linear-gradient(rgba(22, 22, 30, 0.74), rgba(10, 10, 14, 0.84));
+  box-shadow:
+    0 20px 52px rgba(0, 0, 0, 0.6),
+    inset 0 1px 0 rgba(255, 255, 255, 0.07);
+  backdrop-filter: blur(22px) saturate(170%);
+  -webkit-backdrop-filter: blur(22px) saturate(170%);
+}
+.volume-popover[hidden] {
+  display: none;
+}
+.volume-mute {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--identity-accent);
+  cursor: pointer;
+}
+.volume-mute svg {
+  width: 15px;
+  height: 15px;
+}
+.volume-mute.is-muted {
+  color: var(--danger, #ef6b73);
+}
+.volume-mute:hover {
+  background: color-mix(in srgb, var(--identity-accent) 14%, transparent);
+}
+.volume-slider {
+  width: 128px;
+  height: 4px;
+  appearance: none;
+  border-radius: 999px;
+  background: color-mix(
+    in srgb,
+    var(--identity-accent) 22%,
+    rgba(255, 255, 255, 0.08)
+  );
+  cursor: pointer;
+}
+.volume-slider::-webkit-slider-thumb {
+  width: 13px;
+  height: 13px;
+  appearance: none;
+  border-radius: 50%;
+  background: var(--identity-accent);
+  box-shadow: 0 0 8px
+    color-mix(in srgb, var(--identity-accent) 55%, transparent);
+}
+.volume-slider::-moz-range-thumb {
+  width: 13px;
+  height: 13px;
+  border: 0;
+  border-radius: 50%;
+  background: var(--identity-accent);
+}
+.volume-value {
+  min-width: 26px;
+  color: var(--text-dim);
+  font-size: 10px;
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
 .eta-menu {
   position: fixed;
   z-index: 10001;
@@ -1065,6 +1199,139 @@ svg.file-type-icon {
   z-index: 1;
 }
 @media (prefers-reduced-motion: reduce) {
+  /* Tray: clock and volume, pinned to the right of the taskbar. */
+  .tray {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    margin-left: auto;
+    padding: 0 6px 0 8px;
+    border-left: 1px solid var(--bg-border);
+  }
+  .tray-button {
+    display: grid;
+    width: 30px;
+    height: 30px;
+    place-items: center;
+    border: 1px solid transparent;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--text-muted);
+    cursor: pointer;
+  }
+  .tray-button svg {
+    width: 16px;
+    height: 16px;
+  }
+  .tray-button:hover,
+  .tray-clock:hover {
+    border-color: color-mix(in srgb, var(--identity-accent) 26%, transparent);
+    background: color-mix(in srgb, var(--identity-accent) 10%, transparent);
+    color: var(--text-primary);
+  }
+  /* Two lines, time over date, as a desktop taskbar does — it fits the
+   40px bar and puts the thing you glance at most on top. */
+  .tray-clock {
+    display: grid;
+    justify-items: end;
+    gap: 1px;
+    padding: 3px 8px;
+    border: 1px solid transparent;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--text-primary);
+    cursor: default;
+    font-family: var(--font-mono);
+    line-height: 1;
+  }
+  .tray-time {
+    font-size: 12px;
+    font-variant-numeric: tabular-nums;
+  }
+  .tray-date {
+    color: var(--text-dim);
+    font-size: 9px;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: 0.04em;
+  }
+  .volume-popover {
+    position: fixed;
+    z-index: 10002;
+    right: 8px;
+    bottom: 46px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 12px;
+    border: 1px solid var(--bg-border);
+    border-radius: 10px;
+    background: linear-gradient(rgba(22, 22, 30, 0.74), rgba(10, 10, 14, 0.84));
+    box-shadow:
+      0 20px 52px rgba(0, 0, 0, 0.6),
+      inset 0 1px 0 rgba(255, 255, 255, 0.07);
+    backdrop-filter: blur(22px) saturate(170%);
+    -webkit-backdrop-filter: blur(22px) saturate(170%);
+  }
+  .volume-popover[hidden] {
+    display: none;
+  }
+  .volume-mute {
+    display: grid;
+    width: 28px;
+    height: 28px;
+    place-items: center;
+    border: 1px solid transparent;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--identity-accent);
+    cursor: pointer;
+  }
+  .volume-mute svg {
+    width: 15px;
+    height: 15px;
+  }
+  .volume-mute.is-muted {
+    color: var(--danger, #ef6b73);
+  }
+  .volume-mute:hover {
+    background: color-mix(in srgb, var(--identity-accent) 14%, transparent);
+  }
+  .volume-slider {
+    width: 128px;
+    height: 4px;
+    appearance: none;
+    border-radius: 999px;
+    background: color-mix(
+      in srgb,
+      var(--identity-accent) 22%,
+      rgba(255, 255, 255, 0.08)
+    );
+    cursor: pointer;
+  }
+  .volume-slider::-webkit-slider-thumb {
+    width: 13px;
+    height: 13px;
+    appearance: none;
+    border-radius: 50%;
+    background: var(--identity-accent);
+    box-shadow: 0 0 8px
+      color-mix(in srgb, var(--identity-accent) 55%, transparent);
+  }
+  .volume-slider::-moz-range-thumb {
+    width: 13px;
+    height: 13px;
+    border: 0;
+    border-radius: 50%;
+    background: var(--identity-accent);
+  }
+  .volume-value {
+    min-width: 26px;
+    color: var(--text-dim);
+    font-size: 10px;
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+    text-align: right;
+  }
   .eta-menu {
     animation: none;
   }
@@ -1124,7 +1391,10 @@ svg.file-type-icon {
 }
 .task-strip {
   display: flex;
+  /* Takes the slack and scrolls, so a row of open windows pushes
+     against itself rather than squeezing the tray off the bar. */
   min-width: 0;
+  flex: 1 1 auto;
   align-items: center;
   gap: 3px;
   padding: 3px 5px;

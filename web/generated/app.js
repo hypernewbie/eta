@@ -1054,6 +1054,9 @@ facts = true) {
                     : renderText(rawText, result.truncated, ext);
         }
         container.innerHTML = content;
+        // Media inherits the tray's setting, so opening a video does not
+        // ignore a volume the user already chose.
+        applyMediaVolume(container);
         container
             .querySelectorAll(".markdown-preview pre code")
             .forEach((block) => window.hljs?.highlightElement(block));
@@ -1830,6 +1833,10 @@ async function boot() {
     catch {
         // Explorer initialization reports an offline server through the normal UI.
     }
+    // The tray belongs to the desktop chrome, not to any window, so it
+    // starts before the windows are restored and regardless of whether
+    // any open.
+    initTray();
     if (window.WinBox && window.innerWidth >= 700) {
         try {
             enrolledPeers = await api("/api/peers");
@@ -2455,6 +2462,119 @@ async function attachTmuxSession(row) {
     catch (error) {
         showToast(error.message);
     }
+}
+// Taskbar tray: the clock, and one volume control that owns every
+// audio and video preview Eta opens. Media elements are created per
+// preview window, so without a single owner each one would start at
+// full volume regardless of what was set a moment ago.
+const VOLUME_KEY = "eta.volume";
+const MUTED_KEY = "eta.muted";
+let mediaVolume = clampVolume(Number(localStorage.getItem(VOLUME_KEY) ?? "1"));
+let mediaMuted = localStorage.getItem(MUTED_KEY) === "1";
+function clampVolume(value) {
+    if (!Number.isFinite(value))
+        return 1;
+    return Math.min(1, Math.max(0, value));
+}
+function volumeIcon() {
+    if (mediaMuted || mediaVolume === 0)
+        return "volume-x";
+    if (mediaVolume < 0.34)
+        return "volume";
+    if (mediaVolume < 0.67)
+        return "volume-1";
+    return "volume-2";
+}
+function applyMediaVolume(scope = document) {
+    scope.querySelectorAll("audio, video").forEach((element) => {
+        const media = element;
+        media.volume = mediaVolume;
+        media.muted = mediaMuted;
+    });
+}
+function syncVolumeUI() {
+    const percent = Math.round(mediaVolume * 100);
+    const icon = volumeIcon();
+    const button = $("#volume-button");
+    button.innerHTML = `<i data-lucide="${icon}"></i>`;
+    button.title = mediaMuted ? "Muted" : `Volume ${percent}%`;
+    const mute = $("#volume-mute");
+    mute.innerHTML = `<i data-lucide="${icon}"></i>`;
+    mute.title = mediaMuted ? "Unmute" : "Mute";
+    mute.classList.toggle("is-muted", mediaMuted);
+    $("#volume-slider").value = String(percent);
+    $("#volume-value").textContent = mediaMuted ? "off" : String(percent);
+    iconify();
+}
+function setVolume(value, muted = mediaMuted) {
+    mediaVolume = clampVolume(value);
+    // Dragging the slider up is an unmute: nobody raises the volume in
+    // order to keep hearing nothing.
+    mediaMuted = muted && !(mediaVolume > 0 && !muted);
+    localStorage.setItem(VOLUME_KEY, String(mediaVolume));
+    localStorage.setItem(MUTED_KEY, mediaMuted ? "1" : "0");
+    applyMediaVolume();
+    syncVolumeUI();
+}
+function toggleMute() {
+    mediaMuted = !mediaMuted;
+    localStorage.setItem(MUTED_KEY, mediaMuted ? "1" : "0");
+    applyMediaVolume();
+    syncVolumeUI();
+}
+function startTrayClock() {
+    const time = $("#clock-time");
+    const day = $("#clock-date");
+    const clock = $("#clock");
+    const tick = () => {
+        const now = new Date();
+        time.textContent = now.toLocaleTimeString([], {
+            hour: "2-digit",
+            minute: "2-digit",
+        });
+        day.textContent = now.toLocaleDateString([], {
+            day: "2-digit",
+            month: "2-digit",
+            year: "numeric",
+        });
+        clock.title = now.toLocaleDateString([], {
+            weekday: "long",
+            day: "numeric",
+            month: "long",
+            year: "numeric",
+        });
+        // Re-arm on the next minute boundary rather than every second: the
+        // display only shows minutes, so a per-second timer would be a
+        // wakeup a second for nothing.
+        window.setTimeout(tick, 60_000 - (now.getSeconds() * 1000 + now.getMilliseconds()) + 50);
+    };
+    tick();
+}
+function initTray() {
+    startTrayClock();
+    syncVolumeUI();
+    $("#volume-button").addEventListener("click", (event) => {
+        event.stopPropagation();
+        const popover = $("#volume-popover");
+        popover.hidden = !popover.hidden;
+        $("#volume-button").setAttribute("aria-expanded", String(!popover.hidden));
+    });
+    $("#volume-mute").addEventListener("click", () => toggleMute());
+    $("#volume-slider").addEventListener("input", (event) => {
+        setVolume(Number(event.target.value) / 100, false);
+    });
+    // Scrolling over the tray icon adjusts volume, as it does on a
+    // desktop taskbar.
+    $("#volume-button").addEventListener("wheel", (event) => {
+        event.preventDefault();
+        setVolume(mediaVolume + (event.deltaY < 0 ? 0.05 : -0.05), false);
+    }, { passive: false });
+    document.addEventListener("pointerdown", (event) => {
+        if (!event.target.closest("#volume-popover, #volume-button")) {
+            $("#volume-popover").hidden = true;
+            $("#volume-button").setAttribute("aria-expanded", "false");
+        }
+    });
 }
 async function renderDesktopIcons() {
     const layer = $("#desktop-icons");

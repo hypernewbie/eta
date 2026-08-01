@@ -173,6 +173,37 @@
         <span aria-hidden="true">η</span>
       </button>
       <div id="task-strip" class="task-strip" aria-label="Open windows"></div>
+      <div id="tray" class="tray">
+        <button
+          type="button"
+          id="volume-button"
+          class="tray-button"
+          aria-haspopup="true"
+          aria-expanded="false"
+          title="Volume"
+        >
+          <i data-lucide="volume-2"></i>
+        </button>
+        <button type="button" id="clock" class="tray-clock" title="">
+          <span id="clock-time" class="tray-time"></span>
+          <span id="clock-date" class="tray-date"></span>
+        </button>
+      </div>
+      <div id="volume-popover" class="volume-popover" hidden>
+        <button type="button" id="volume-mute" class="volume-mute" title="Mute">
+          <i data-lucide="volume-2"></i>
+        </button>
+        <input
+          type="range"
+          id="volume-slider"
+          class="volume-slider"
+          min="0"
+          max="100"
+          step="1"
+          aria-label="Volume"
+        />
+        <span id="volume-value" class="volume-value">100</span>
+      </div>
     </nav>
     <section id="eta-menu" class="eta-menu" aria-label="Computers" hidden>
       <div class="eta-menu-label">COMPUTERS</div>
