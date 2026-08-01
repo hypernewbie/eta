@@ -157,3 +157,84 @@ test("copied descriptor survives a page reload via localStorage", async ({
     "test-results/clipboard-dragdrop/reload.md",
   );
 });
+
+test("dragging a cut item preserves the cut operation through the drop", async ({
+  page,
+  request,
+}) => {
+  rmSync(FIXTURE, { recursive: true, force: true });
+  mkdirSync(FIXTURE, { recursive: true });
+  mkdirSync(join(FIXTURE, "dst"), { recursive: true });
+  writeFileSync(join(FIXTURE, "moved.md"), "# moved\n");
+
+  const explorer = page.locator(".winbox.eta-window").first();
+  await openFixture(explorer, page, request);
+
+  // Cut via the context menu so explorerClipboardOperation = "cut".
+  await explorer
+    .locator("button.entry.file", { hasText: "moved.md" })
+    .first()
+    .click({ button: "right" });
+  await page.locator('[data-file-action="cut"]').click();
+
+  const beforeDrag = await page.evaluate(() =>
+    window.localStorage.getItem("eta.clipboard"),
+  );
+  expect(JSON.parse(beforeDrag!).operation).toBe("cut");
+
+  // Drag the same file onto the dst folder. The dragstart handler
+  // used to silently reset operation to "copy", silently demoting
+  // the user's cut intent. With the fix, dragging the same item
+  // preserves the cut, so the drop performs a move (source gone,
+  // destination populated).
+  const result = await page.evaluate(
+    async ({ sourceSel, targetSel }) => {
+      const source = document.querySelector(sourceSel);
+      const target = document.querySelector(targetSel);
+      if (!(source instanceof HTMLElement) || !(target instanceof HTMLElement)) {
+        return { ok: false };
+      }
+      const rect = target.getBoundingClientRect();
+      const dt = new DataTransfer();
+      source.dispatchEvent(
+        new DragEvent("dragstart", {
+          bubbles: true,
+          cancelable: true,
+          dataTransfer: dt,
+        }),
+      );
+      target.dispatchEvent(
+        new DragEvent("dragover", {
+          bubbles: true,
+          cancelable: true,
+          dataTransfer: dt,
+          clientX: rect.left + rect.width / 2,
+          clientY: rect.top + rect.height / 2,
+        }),
+      );
+      target.dispatchEvent(
+        new DragEvent("drop", {
+          bubbles: true,
+          cancelable: true,
+          dataTransfer: dt,
+          clientX: rect.left + rect.width / 2,
+          clientY: rect.top + rect.height / 2,
+        }),
+      );
+      return { ok: true };
+    },
+    {
+      sourceSel: 'button.entry.file',
+      targetSel: 'button.entry.directory',
+    },
+  );
+  expect(result.ok).toBe(true);
+
+  // Cut → move semantics: source disappears, destination gains it.
+  await expect
+    .poll(() => existsSync(join(FIXTURE, "moved.md")), { timeout: 5_000 })
+    .toBe(false);
+  await expect
+    .poll(() => existsSync(join(FIXTURE, "dst/moved.md")), { timeout: 5_000 })
+    .toBe(true);
+});
