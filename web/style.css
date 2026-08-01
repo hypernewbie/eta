@@ -1330,8 +1330,56 @@ body.windowed {
   background: var(--window-accent);
   box-shadow: 0 0 10px var(--window-accent);
 }
-.identity-window .wb-title {
+/* Only the focused window wears the host accent. Previously every
+   window did — same rail, same glowing underline, same bright title —
+   so focus was carried by a box-shadow alone, which is close to
+   invisible against a dark desktop. An unfocused window now reads as
+   asleep: neutral edge, grey title, no accent, and a body pulled back
+   in brightness and saturation. */
+.identity-window.focus .wb-title {
   color: var(--window-accent, var(--accent-bright));
+}
+.winbox:not(.focus) .wb-title {
+  color: var(--text-muted);
+  text-shadow: none;
+}
+.winbox:not(.focus) .wb-header {
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.02), transparent);
+}
+.winbox:not(.focus) .wb-header::before {
+  opacity: 0;
+}
+.winbox:not(.focus) .wb-header::after {
+  opacity: 0.12;
+  box-shadow: none;
+}
+.winbox:not(.focus) .wb-body {
+  filter: saturate(0.82) brightness(0.88);
+}
+.winbox:not(.focus) {
+  border-color: rgba(255, 255, 255, 0.06);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.42);
+}
+.winbox {
+  transition:
+    box-shadow 160ms ease,
+    border-color 160ms ease;
+}
+.winbox .wb-body,
+.winbox .wb-header::before,
+.winbox .wb-header::after,
+.winbox .wb-title {
+  transition:
+    filter 160ms ease,
+    opacity 160ms ease,
+    color 160ms ease;
+}
+@media (prefers-reduced-motion: reduce) {
+  .winbox,
+  .winbox .wb-body,
+  .winbox .wb-title {
+    transition: none;
+  }
 }
 .winbox.identity-window.focus {
   box-shadow:
