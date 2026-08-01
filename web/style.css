@@ -167,6 +167,13 @@ button {
   opacity: 0.9;
   text-shadow: 0 0 8px var(--identity-glow);
 }
+/* Without this the two children below are block boxes — .icon-button is
+   display: grid — and stack vertically inside a 48px header. */
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
 .header-status {
   color: var(--text-muted);
   display: flex;

@@ -17,18 +17,48 @@ test("local host identity labels the desktop and its windows", async ({
   // A window is titled with the folder it is showing, not with the app
   // name, so at the top of a root that is the root's own name.
   await expect(title).toContainText(`${identity.glyph} ${roots[0].name}`);
-  await expect(title).toHaveCSS("color", await page.evaluate(() => {
-    const identityColor = getComputedStyle(document.documentElement).getPropertyValue("--identity-accent");
-    const probe = document.createElement("i");
-    probe.style.color = identityColor;
-    document.body.append(probe);
-    const color = getComputedStyle(probe).color;
-    probe.remove();
-    return color;
-  }));
+  await expect(title).toHaveCSS(
+    "color",
+    await page.evaluate(() => {
+      const identityColor = getComputedStyle(
+        document.documentElement,
+      ).getPropertyValue("--identity-accent");
+      const probe = document.createElement("i");
+      probe.style.color = identityColor;
+      document.body.append(probe);
+      const color = getComputedStyle(probe).color;
+      probe.remove();
+      return color;
+    }),
+  );
 });
 
-test("picking a swatch persists across a hard reload", async ({ page, request }) => {
+test("header actions sit on one row inside the header", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto("/");
+
+  // These are laid out by a single .header-actions flex rule. Without
+  // it they are block boxes (.icon-button is display: grid) and stack:
+  // measured 77px of content in a 48px header, the status line clipped
+  // above it and the palette button hanging 14px below it.
+  const header = await page.locator(".app-header").boundingBox();
+  const actions = await page.locator(".header-actions").boundingBox();
+  const addPeer = await page.locator("#add-peer-button").boundingBox();
+  const theme = await page.locator("#theme-button").boundingBox();
+
+  expect(theme!.y).toBe(addPeer!.y);
+  expect(theme!.x).toBeGreaterThan(addPeer!.x + addPeer!.width - 1);
+  expect(actions!.height).toBeLessThanOrEqual(header!.height);
+  expect(actions!.y).toBeGreaterThanOrEqual(header!.y);
+  expect(actions!.y + actions!.height).toBeLessThanOrEqual(
+    header!.y + header!.height,
+  );
+});
+
+test("picking a swatch persists across a hard reload", async ({
+  page,
+  request,
+}) => {
   await page.setViewportSize({ width: 1440, height: 900 });
 
   // Reset the identity so this spec doesn't depend on the host's
