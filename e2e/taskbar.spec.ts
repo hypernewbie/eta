@@ -5,6 +5,7 @@ test("taskbar closes and reopens Explorer", async ({ page }) => {
   const identity = await page.request
     .get("/api/identity")
     .then((r) => r.json());
+  const roots = await page.request.get("/api/roots").then((r) => r.json());
   await page.goto("/");
 
   const taskbar = page.locator("#taskbar");
@@ -28,6 +29,11 @@ test("taskbar closes and reopens Explorer", async ({ page }) => {
     await explorer.locator(".wb-title").textContent(),
   );
   expect(await explorerTask.getAttribute("title")).toContain(identity.glyph);
+  // Doubles as a contamination canary: a test starts from an empty desktop,
+  // so the Explorer boots at a root and is titled for it. This assertion is
+  // what exposed the shared fixture binding its hooks to a single spec file
+  // and leaving every other spec without a state reset.
+  expect(await explorerTask.getAttribute("title")).toContain(roots[0].name);
   const explorerTaskBox = await explorerTask.boundingBox();
   expect(explorerTaskBox?.width).toBeGreaterThanOrEqual(132);
 
@@ -38,7 +44,10 @@ test("taskbar closes and reopens Explorer", async ({ page }) => {
   await page.locator("#eta-launcher").click();
   const localLocation = page.locator('[data-location="local"]');
   await expect(localLocation).toBeVisible();
-  await expect(localLocation).toContainText((await page.locator("#hostname-display").textContent())?.toUpperCase() || "");
+  await expect(localLocation).toContainText(
+    (await page.locator("#hostname-display").textContent())?.toUpperCase() ||
+      "",
+  );
   await localLocation.click();
   const reopened = page.locator(".winbox.eta-window");
   await expect(reopened).toHaveCount(1);
