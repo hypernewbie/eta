@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"sync"
@@ -121,8 +122,19 @@ func (t *peerAuthTransport) RoundTrip(req *http.Request) (*http.Response, error)
 		req.Header.Set("Cookie", access.SessionCookie+"="+token)
 	}
 	response, err := t.base.RoundTrip(req)
-	if err != nil || response.StatusCode != http.StatusUnauthorized || len(t.verifier) == 0 {
+	if err != nil || response.StatusCode != http.StatusUnauthorized {
 		return response, err
+	}
+	// No verifier on file at all: nothing to retry with. This is the
+	// common new case — a peer enrolled before it had a password, which
+	// then turned one on. Every handler here just relays the peer's
+	// status and body verbatim, so replacing the body with a signal the
+	// client can act on (see web/app.ts's api()) reaches the browser
+	// through all ~9 call sites for free, rather than needing each one
+	// updated to recognise this case individually.
+	if len(t.verifier) == 0 {
+		response.Body.Close()
+		return peerAuthRequiredResponse(req), nil
 	}
 	// Exactly one retry, not a loop: a peer that rejects a *correct*
 	// verifier — its password changed since this one was cached — must
@@ -131,25 +143,55 @@ func (t *peerAuthTransport) RoundTrip(req *http.Request) (*http.Response, error)
 		// This request's body was already consumed and cannot be safely
 		// replayed (a caller built it from a reader that isn't one of the
 		// GetBody-populating types net/http recognises). Surface the
-		// original 401 rather than resend a request with an empty body.
-		return response, nil
+		// signal rather than resend a request with an empty body.
+		response.Body.Close()
+		return peerAuthRequiredResponse(req), nil
 	}
 	response.Body.Close()
 	token, loginErr := peerLogin(req.Context(), t.peerURL, t.verifier)
 	if loginErr != nil || token == "" {
-		return t.base.RoundTrip(req)
+		return peerAuthRequiredResponse(req), nil
 	}
 	t.cache.set(t.peerURL, token)
 	retry := req.Clone(req.Context())
 	if req.GetBody != nil {
 		body, err := req.GetBody()
 		if err != nil {
-			return t.base.RoundTrip(req)
+			return peerAuthRequiredResponse(req), nil
 		}
 		retry.Body = body
 	}
 	retry.Header.Set("Cookie", access.SessionCookie+"="+token)
-	return t.base.RoundTrip(retry)
+	retryResponse, err := t.base.RoundTrip(retry)
+	if err == nil && retryResponse.StatusCode == http.StatusUnauthorized {
+		// The cached verifier itself is now wrong — the peer's password
+		// changed since it was recorded here — rather than just its
+		// session having expired. Same signal: there is no password this
+		// server can retry with on its own.
+		retryResponse.Body.Close()
+		return peerAuthRequiredResponse(req), nil
+	}
+	return retryResponse, err
+}
+
+// peerAuthRequiredResponse tells the browser this peer needs a
+// password this server does not have, distinctly from every other
+// reason a proxied call can fail: peer_auth_required is what
+// web/app.ts's api() looks for to prompt for the peer's password
+// in place, instead of surfacing a bare "Request failed (401)".
+func peerAuthRequiredResponse(req *http.Request) *http.Response {
+	body := `{"error":"that PC now requires its access password","peer_auth_required":true}`
+	return &http.Response{
+		Status:        "401 Unauthorized",
+		StatusCode:    http.StatusUnauthorized,
+		Proto:         "HTTP/1.1",
+		ProtoMajor:    1,
+		ProtoMinor:    1,
+		Header:        http.Header{"Content-Type": []string{"application/json; charset=utf-8"}},
+		Body:          io.NopCloser(strings.NewReader(body)),
+		ContentLength: int64(len(body)),
+		Request:       req,
+	}
 }
 
 // peerAuthStatus mirrors the JSON /api/auth/status answers with — just

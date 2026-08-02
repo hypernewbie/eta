@@ -390,6 +390,7 @@ func (s *server) routes() http.Handler {
 	mux.HandleFunc("GET /api/remote/preview", s.handleRemotePreview)
 	mux.HandleFunc("GET /api/remote/thumbnail", s.handleRemoteThumbnail)
 	mux.HandleFunc("POST /api/peers", s.handlePeerAdd)
+	mux.HandleFunc("POST /api/peers/credential", s.handlePeerCredential)
 	mux.HandleFunc("DELETE /api/peers", s.handlePeerDelete)
 	mux.HandleFunc("POST /api/directories", s.handleDirectoryCreate)
 	mux.HandleFunc("POST /api/copy", s.handleCopy)
@@ -1642,50 +1643,114 @@ func (s *server) handlePeerAdd(w http.ResponseWriter, r *http.Request) {
 	}
 	peer.ID, peer.Name, peer.Accent, peer.Glyph = identity.ID, identity.Hostname, identity.Accent, identity.Glyph
 
-	// /api/identity stays public regardless of a peer's password (see
-	// access.go's public-path list), so probing it above never told us
-	// whether this peer needs a login too. Ask separately, on the one
-	// endpoint that is also always public for exactly this reason.
-	status, err := fetchPeerAuthStatus(r.Context(), peer.URL)
-	if err != nil {
-		writeError(w, fmt.Errorf("check peer access protection: %w", err))
+	peer, ok := s.authenticateToPeer(w, r, peer, request.Password)
+	if !ok {
 		return
 	}
-	if status.Enabled {
-		if request.Password == "" {
-			// Distinguishable from a generic failure so the Add PC dialog
-			// can reveal a password field and resubmit, instead of just
-			// reporting that the PC could not be added.
-			writeJSON(w, http.StatusUnauthorized, map[string]any{
-				"error":                  "that PC requires its access password",
-				"peer_password_required": true,
-			})
-			return
-		}
-		salt, err := base64.RawURLEncoding.DecodeString(status.Salt)
-		if err != nil {
-			writeError(w, errors.New("peer returned an invalid salt"))
-			return
-		}
-		verifier := access.DeriveVerifier(request.Password, salt)
-		token, err := peerLogin(r.Context(), peer.URL, verifier)
-		if err != nil {
-			writeError(w, fmt.Errorf("log in to that PC: %w", err))
-			return
-		}
-		// peer.Verifier is what makes every later proxied call to this
-		// peer able to re-authenticate on its own — see peerAuthTransport.
-		peer.Verifier = base64.RawURLEncoding.EncodeToString(verifier)
-		if token != "" {
-			s.peerSessions.set(strings.TrimSuffix(peer.URL, "/"), token)
-		}
-	}
-
 	if err := s.peers.Add(peer); err != nil {
 		writeError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusCreated, peer)
+}
+
+// authenticateToPeer checks whether peer needs a password and, if a
+// password was supplied, logs in and sets peer.Verifier. It writes its
+// own error response and returns ok=false on any failure — including the
+// "needs one but none was given" case, flagged distinctly so a client
+// can prompt rather than just report failure. Shared by handlePeerAdd
+// (a new peer) and handlePeerCredential (an already-enrolled one whose
+// peer turned password protection on after it was added).
+func (s *server) authenticateToPeer(w http.ResponseWriter, r *http.Request, peer peers.Peer, password string) (peers.Peer, bool) {
+	// /api/identity stays public regardless of a peer's password (see
+	// access_handlers.go's public-path list), so probing it during
+	// enrollment never told us whether this peer needs a login too. Ask
+	// separately, on the one endpoint that is also always public for
+	// exactly this reason.
+	status, err := fetchPeerAuthStatus(r.Context(), peer.URL)
+	if err != nil {
+		writeError(w, fmt.Errorf("check peer access protection: %w", err))
+		return peer, false
+	}
+	if !status.Enabled {
+		// This peer does not require a password (or no longer does): clear
+		// any stale verifier rather than leave a credential on file for a
+		// password that does not exist, in case it is ever set again with
+		// a different one.
+		peer.Verifier = ""
+		return peer, true
+	}
+	if password == "" {
+		// Distinguishable from a generic failure so the caller can reveal
+		// a password field and resubmit, instead of just reporting that
+		// the PC could not be reached.
+		writeJSON(w, http.StatusUnauthorized, map[string]any{
+			"error":                  "that PC requires its access password",
+			"peer_password_required": true,
+		})
+		return peer, false
+	}
+	salt, err := base64.RawURLEncoding.DecodeString(status.Salt)
+	if err != nil {
+		writeError(w, errors.New("peer returned an invalid salt"))
+		return peer, false
+	}
+	verifier := access.DeriveVerifier(password, salt)
+	token, err := peerLogin(r.Context(), peer.URL, verifier)
+	if err != nil {
+		writeError(w, fmt.Errorf("log in to that PC: %w", err))
+		return peer, false
+	}
+	// peer.Verifier is what makes every later proxied call to this peer
+	// able to re-authenticate on its own — see peerAuthTransport.
+	peer.Verifier = base64.RawURLEncoding.EncodeToString(verifier)
+	if token != "" {
+		s.peerSessions.set(strings.TrimSuffix(peer.URL, "/"), token)
+	}
+	return peer, true
+}
+
+// handlePeerCredential updates the stored credential for an *already
+// enrolled* peer, without re-adding it. handlePeerAdd only ever asks for
+// a peer's password once, at enrollment — a peer that turns its own
+// password on afterward left every other machine's proxied calls to it
+// failing with no way to fix it short of removing and re-adding the
+// entry. This is that fix: same login, applied to the existing record.
+func (s *server) handlePeerCredential(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.peers == nil {
+		writeError(w, errors.New("peer inventory is unavailable"))
+		return
+	}
+	var request struct {
+		URL      string `json:"url"`
+		Password string `json:"password"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&request); err != nil {
+		writeError(w, err)
+		return
+	}
+	peer, found, err := s.peers.Find(request.URL)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	if !found {
+		writeError(w, errors.New("unknown peer"))
+		return
+	}
+	peer, ok := s.authenticateToPeer(w, r, peer, request.Password)
+	if !ok {
+		return
+	}
+	if err := s.peers.Update(peer); err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, peer)
 }
 
 type peerIdentity struct {

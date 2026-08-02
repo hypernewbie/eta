@@ -598,11 +598,66 @@ function parentPath(view: ExplorerView) {
   return view.state.path.split("/").filter(Boolean).slice(0, -1).join("/");
 }
 
-async function api(path: string, init?: RequestInit) {
+// Peer credential prompts are cached per URL so two requests that both
+// fail at once (a remote explorer window firing roots + list together)
+// prompt for that PC's password once, not twice.
+const peerReauthInFlight = new Map<string, Promise<boolean>>();
+async function reauthenticatePeer(peerURL: string): Promise<boolean> {
+  const inFlight = peerReauthInFlight.get(peerURL);
+  if (inFlight) return inFlight;
+  const attempt = (async () => {
+    const known = enrolledPeers.find((candidate) => candidate.url === peerURL);
+    const label = known ? known.name.toUpperCase() : peerURL;
+    const password = window.prompt(
+      `${label} now requires its access password:`,
+    );
+    if (!password) return false;
+    try {
+      const response = await fetch("/api/peers/credential", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url: peerURL, password }),
+      });
+      if (!response.ok) {
+        const body = await response.json().catch(() => ({}));
+        showToast(body.error || "Wrong password for that PC");
+        return false;
+      }
+      return true;
+    } catch {
+      showToast(`Could not reach ${label}`);
+      return false;
+    }
+  })();
+  peerReauthInFlight.set(peerURL, attempt);
+  try {
+    return await attempt;
+  } finally {
+    peerReauthInFlight.delete(peerURL);
+  }
+}
+async function api(
+  path: string,
+  init?: RequestInit,
+  _peerAuthRetried = false,
+): Promise<any> {
   const response = await fetch(path, init);
   const body = await response.json().catch(() => ({}));
-  if (!response.ok)
+  if (!response.ok) {
+    // A peer this server already knows about turned its own password on
+    // after it was added — enrollment only ever asks for a password
+    // once. Every proxied route signals this the same way (see
+    // peerAuthTransport in peer_auth.go), so this one spot recovers it
+    // for all of them: prompt for that PC's password, update the stored
+    // credential, and retry the original request exactly once.
+    if (body.peer_auth_required && !_peerAuthRetried) {
+      const peerURL = new URL(path, location.origin).searchParams.get("peer");
+      if (peerURL && (await reauthenticatePeer(peerURL))) {
+        return api(path, init, true);
+      }
+    }
     throw new Error(body.error || `Request failed (${response.status})`);
+  }
   return body;
 }
 function showToast(message, variant = "danger") {
@@ -3279,19 +3334,25 @@ $("#desktop-icons").addEventListener("contextmenu", (event) => {
   const icon = (event.target as HTMLElement).closest(
     ".desktop-icon",
   ) as HTMLElement | null;
-  // Only removable icons have anything to offer here; computers and
-  // drives are not shortcuts.
   const model = desktopIconIndex.get(icon?.dataset.desktopIcon || "");
-  if (!icon || !model?.removable) return;
+  // Shortcuts offer unpin; a peer's own computer icon offers entering
+  // its access password (see reauthenticatePeer — the same action the
+  // auto-prompt takes, available here before any call has failed).
+  // Everything else (local computer, drives, tmux) has nothing to show.
+  if (!icon || !model || (!model.removable && !model.peer)) return;
   event.preventDefault();
   desktopContextKey = model.id;
+  $("#desktop-context-menu [data-desktop-action='unpin']").hidden =
+    !model.removable;
+  $("#desktop-context-menu [data-desktop-action='peer-password']").hidden =
+    !model.peer;
   const menu = $("#desktop-context-menu");
   menu.style.left = `${event.clientX}px`;
   menu.style.top = `${event.clientY}px`;
   menu.hidden = false;
   iconify();
 });
-$("#desktop-context-menu").addEventListener("click", (event) => {
+$("#desktop-context-menu").addEventListener("click", async (event) => {
   const action = (event.target as HTMLElement).closest(
     "[data-desktop-action]",
   ) as HTMLElement | null;
@@ -3301,6 +3362,14 @@ $("#desktop-context-menu").addEventListener("click", (event) => {
   if (!action || !key) return;
   if (action.dataset.desktopAction === "unpin") {
     unpinFromDesktop(key.replace(/^shortcut:/, ""));
+    return;
+  }
+  if (action.dataset.desktopAction === "peer-password") {
+    const peer = desktopIconIndex.get(key)?.peer;
+    if (!peer) return;
+    if (await reauthenticatePeer(peer.url)) {
+      showToast(`Updated the password Eta uses for ${peer.name}`, "success");
+    }
     return;
   }
   desktopIconIndex.get(key)?.open();

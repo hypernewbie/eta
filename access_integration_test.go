@@ -35,6 +35,90 @@ func setPassword(t *testing.T, s *server, password string) []byte {
 	return verifier
 }
 
+// TestAlreadyEnrolledPeerTurningOnAPasswordIsRecoverable is the exact
+// scenario a password feature added after peers already exist has to get
+// right: A and B are already linked with no password anywhere. B turns
+// one on. A's next proxied call to B must fail *distinctly* — not a bare
+// 401 — and there must be a way to fix it without removing and re-adding
+// B, since handlePeerAdd only ever asks for a password once, at
+// enrollment.
+func TestAlreadyEnrolledPeerTurningOnAPasswordIsRecoverable(t *testing.T) {
+	receiverRoot := t.TempDir()
+	receiver, err := newServer([]string{receiverRoot})
+	if err != nil {
+		t.Fatal(err)
+	}
+	receiverHTTP := httptest.NewServer(receiver.routes())
+	defer receiverHTTP.Close()
+
+	coordinator, err := newServer([]string{t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	coordinator.peers = peers.New(filepath.Join(t.TempDir(), "peers.json"))
+	// Enrolled while the receiver had no password: exactly today's
+	// existing peers once this feature ships.
+	add := httptest.NewRequest(http.MethodPost, "/api/peers", strings.NewReader(`{"url":"`+receiverHTTP.URL+`"}`))
+	w := httptest.NewRecorder()
+	coordinator.routes().ServeHTTP(w, add)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("enroll: got %d %s", w.Code, w.Body.String())
+	}
+
+	list := func() *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodGet, "/api/remote/list?peer="+receiverHTTP.URL+"&root=0&path=", nil)
+		w := httptest.NewRecorder()
+		coordinator.routes().ServeHTTP(w, req)
+		return w
+	}
+	if w := list(); w.Code != http.StatusOK {
+		t.Fatalf("before the receiver has a password: got %d %s", w.Code, w.Body.String())
+	}
+
+	// The linked remote now requires a password this side never learned.
+	setPassword(t, receiver, "newly-added-secret")
+
+	w = list()
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("expected the proxied call to fail once the peer needs a password, got %d", w.Code)
+	}
+	var flagged map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &flagged); err != nil {
+		t.Fatalf("response was not the distinct signal, was: %s", w.Body.String())
+	}
+	if flagged["peer_auth_required"] != true {
+		t.Fatalf("proxied 401 did not flag peer_auth_required: %v", flagged)
+	}
+
+	// Fixed without removing and re-adding the peer: the credential
+	// endpoint updates the existing entry in place.
+	credential := httptest.NewRequest(http.MethodPost, "/api/peers/credential", strings.NewReader(`{"url":"`+receiverHTTP.URL+`","password":"newly-added-secret"}`))
+	credW := httptest.NewRecorder()
+	coordinator.routes().ServeHTTP(credW, credential)
+	if credW.Code != http.StatusOK {
+		t.Fatalf("set credential: got %d %s", credW.Code, credW.Body.String())
+	}
+	items, err := coordinator.peers.List()
+	if err != nil || len(items) != 1 || items[0].Verifier == "" {
+		t.Fatalf("credential was not persisted on the existing entry: %#v err=%v", items, err)
+	}
+
+	if w := list(); w.Code != http.StatusOK {
+		t.Fatalf("after setting the credential: got %d %s", w.Code, w.Body.String())
+	}
+
+	// A wrong password against the credential endpoint must not silently
+	// "succeed" and must not corrupt the working credential already on
+	// file... but note it does overwrite it, by design (this is an
+	// explicit edit action) — verify it reports failure rather than 200.
+	wrongCredential := httptest.NewRequest(http.MethodPost, "/api/peers/credential", strings.NewReader(`{"url":"`+receiverHTTP.URL+`","password":"nope"}`))
+	wrongW := httptest.NewRecorder()
+	coordinator.routes().ServeHTTP(wrongW, wrongCredential)
+	if wrongW.Code == http.StatusOK {
+		t.Fatal("wrong password against the credential endpoint reported success")
+	}
+}
+
 func hmacProof(verifier []byte, challenge string) string {
 	mac := hmac.New(sha256.New, verifier)
 	_, _ = mac.Write([]byte(challenge))
