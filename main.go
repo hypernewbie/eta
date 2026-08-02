@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/rand"
 	"embed"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -27,6 +28,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/hypernewbie/eta/internal/access"
 	"github.com/hypernewbie/eta/internal/bindaddr"
 	"github.com/hypernewbie/eta/internal/diskcache"
 	"github.com/hypernewbie/eta/internal/fileops"
@@ -67,6 +69,9 @@ type server struct {
 	identityMu   sync.RWMutex
 	state        *uistate.Store
 	peers        *peers.Store
+	access       *access.Manager
+	accessPath   string
+	peerSessions *peerSessionCache
 	remoteCache  *diskcache.Cache
 	hotRanges    *rangecache.Cache
 	transfers    *transfer.Store
@@ -109,6 +114,7 @@ func main() {
 	accent := flag.String("accent", "", "host accent override (one of Eta's Phi accent names)")
 	stateFile := flag.String("state-file", "", "persistent UI state file (default: user config directory)")
 	peersFile := flag.String("peers-file", "", "explicit coordinator peer inventory file (default: user config directory)")
+	accessFile := flag.String("access-file", "", "persistent access-password file (default: user config directory)")
 	remoteCacheDir := flag.String("remote-cache-dir", "", "directory for cached remote byte ranges (default: user cache directory)")
 	remoteCacheSize := flag.String("remote-cache-size", "4GB", "maximum remote byte-range cache size")
 	hotRangeCacheSize := flag.String("hot-range-cache-size", "64MB", "maximum RAM used by hot remote ranges")
@@ -165,6 +171,21 @@ func main() {
 		}
 	}
 	s.peers = peers.New(peerPath)
+	accessPath := *accessFile
+	if accessPath == "" {
+		accessPath, err = access.DefaultPath()
+		if err != nil {
+			log.Fatal(err)
+		}
+	}
+	s.accessPath = accessPath
+	accessCfg, err := access.Load(accessPath)
+	if err != nil {
+		log.Fatal(err)
+	}
+	if err := s.access.Configure(accessCfg.PasswordHash); err != nil {
+		log.Fatal(err)
+	}
 	remoteDir := *remoteCacheDir
 	if remoteDir == "" {
 		remoteDir, err = diskcache.DefaultPath()
@@ -287,6 +308,8 @@ func newServer(paths []string) (*server, error) {
 		identity:     hostid.For("test-host", "eta"),
 		terminals:    terminal.NewManager(),
 		transferJobs: transfer.NewJobs(),
+		access:       access.NewManager(),
+		peerSessions: newPeerSessionCache(),
 		shutdown:     ctx,
 	}
 	s.shutdownCancel = cancel
@@ -319,6 +342,9 @@ func newServer(paths []string) (*server, error) {
 
 func (s *server) routes() http.Handler {
 	mux := http.NewServeMux()
+	mux.HandleFunc("GET /api/auth/status", s.handleAuthStatus)
+	mux.HandleFunc("POST /api/auth/login", s.handleAuthLogin)
+	mux.HandleFunc("POST /api/auth/password", s.handleAuthPassword)
 	mux.HandleFunc("GET /api/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	})
@@ -374,7 +400,7 @@ func (s *server) routes() http.Handler {
 	mux.HandleFunc("GET /api/thumbnail", s.handleThumbnail)
 	mux.HandleFunc("GET /api/file", s.handleFile)
 	mux.Handle("/", http.FileServer(http.FS(s.web)))
-	return securityHeaders(mux)
+	return securityHeaders(s.accessAuthMiddleware(mux))
 }
 
 func (s *server) handleIdentity(w http.ResponseWriter, r *http.Request) {
@@ -698,7 +724,7 @@ func (s *server) proxyRemoteTerminal(w http.ResponseWriter, r *http.Request, rou
 	if contentType := r.Header.Get("Content-Type"); contentType != "" {
 		request.Header.Set("Content-Type", contentType)
 	}
-	response, err := (&http.Client{Timeout: 10 * time.Second}).Do(request)
+	response, err := s.peerClient(peer, 10*time.Second).Do(request)
 	if err != nil {
 		writeError(w, err)
 		return
@@ -745,7 +771,7 @@ func (s *server) streamRemoteTerminal(w http.ResponseWriter, r *http.Request, ro
 		return
 	}
 	request.Header.Set("Accept", "text/event-stream")
-	response, err := (&http.Client{}).Do(request)
+	response, err := s.peerClient(peer, 0).Do(request)
 	if err != nil {
 		writeError(w, err)
 		return
@@ -858,7 +884,7 @@ func (s *server) handleTransferSend(w http.ResponseWriter, r *http.Request) {
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 		defer cancel()
-		client := &http.Client{Timeout: 30 * time.Second}
+		client := s.peerClientForURL(peer.URL, 30*time.Second)
 		var transferErr error
 		if info.IsDir() {
 			transferErr = transfer.SendTreeWithProgress(ctx, client, peer.URL, request.DestinationRoot, request.DestinationPath, source, tree, func(completed, _ int) { s.transferJobs.Progress(job.ID, completed) })
@@ -958,7 +984,7 @@ func (s *server) attemptResume(ctx context.Context, job transfer.Job) {
 	}
 	transferCtx, cancel := context.WithTimeout(ctx, 30*time.Minute)
 	defer cancel()
-	client := &http.Client{Timeout: 30 * time.Second}
+	client := s.peerClientForURL(job.DestinationPeer, 30*time.Second)
 	var transferErr error
 	if info.IsDir() {
 		tree, err := transfer.BuildTree(srcPath)
@@ -1033,7 +1059,7 @@ func (s *server) handleRemoteTransferSend(w http.ResponseWriter, r *http.Request
 		return
 	}
 	endpoint := strings.TrimSuffix(source.URL, "/") + "/api/transfers/send"
-	response, err := (&http.Client{Timeout: 10 * time.Second}).Post(endpoint, "application/json", strings.NewReader(string(body)))
+	response, err := s.peerClient(source, 10*time.Second).Post(endpoint, "application/json", strings.NewReader(string(body)))
 	if err != nil {
 		writeError(w, err)
 		return
@@ -1077,7 +1103,7 @@ func (s *server) handleRemoteDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	request.Header.Set("Content-Type", "application/json")
-	response, err := (&http.Client{Timeout: 10 * time.Second}).Do(request)
+	response, err := s.peerClient(peer, 10*time.Second).Do(request)
 	if err != nil {
 		writeError(w, err)
 		return
@@ -1107,7 +1133,7 @@ func (s *server) handleRemoteTransferJob(w http.ResponseWriter, r *http.Request)
 		writeError(w, errors.New("missing transfer job ID"))
 		return
 	}
-	response, err := (&http.Client{Timeout: 10 * time.Second}).Get(strings.TrimSuffix(peer.URL, "/") + "/api/transfer-jobs/" + url.PathEscape(id))
+	response, err := s.peerClient(peer, 10*time.Second).Get(strings.TrimSuffix(peer.URL, "/") + "/api/transfer-jobs/" + url.PathEscape(id))
 	if err != nil {
 		writeError(w, err)
 		return
@@ -1476,7 +1502,7 @@ func (s *server) proxyPeer(w http.ResponseWriter, r *http.Request, route string)
 		writeError(w, err)
 		return
 	}
-	response, err := (&http.Client{Timeout: 10 * time.Second}).Do(request)
+	response, err := s.peerClient(peer, 10*time.Second).Do(request)
 	if err != nil {
 		writeError(w, err)
 		return
@@ -1517,7 +1543,7 @@ func (s *server) proxyCachedPeerRange(w http.ResponseWriter, r *http.Request, pe
 		writeError(w, errors.New("invalid root"))
 		return true
 	}
-	source := &remotefile.HTTPSource{BaseURL: peer.URL, Root: rootID, Client: &http.Client{Timeout: 30 * time.Second}}
+	source := &remotefile.HTTPSource{BaseURL: peer.URL, Root: rootID, Client: s.peerClient(peer, 30*time.Second)}
 	body, info, err := remotefile.ReadHotCachedRange(r.Context(), s.hotRanges, s.remoteCache, source, r.URL.Query().Get("path"), start, end-start+1)
 	if err != nil {
 		writeError(w, err)
@@ -1591,17 +1617,70 @@ func (s *server) handlePeerAdd(w http.ResponseWriter, r *http.Request) {
 		writeError(w, errors.New("peer inventory is unavailable"))
 		return
 	}
-	var peer peers.Peer
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&peer); err != nil {
+	// password is transient: used once here to derive a verifier and log
+	// in, then discarded. Only the derived verifier is ever persisted (as
+	// peer.Verifier), never this field.
+	var request struct {
+		peers.Peer
+		Password string `json:"password,omitempty"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&request); err != nil {
 		writeError(w, err)
 		return
 	}
+	peer := request.Peer
+	// Verifier is only ever set by this handler's own successful login
+	// below, never accepted from the request: a client that could plant
+	// an arbitrary value here would gain nothing against a peer that
+	// actually checks it, but it should not be possible to persist an
+	// unverified credential at all.
+	peer.Verifier = ""
 	identity, err := probePeer(r.Context(), peer.URL)
 	if err != nil {
 		writeError(w, fmt.Errorf("probe peer identity: %w", err))
 		return
 	}
 	peer.ID, peer.Name, peer.Accent, peer.Glyph = identity.ID, identity.Hostname, identity.Accent, identity.Glyph
+
+	// /api/identity stays public regardless of a peer's password (see
+	// access.go's public-path list), so probing it above never told us
+	// whether this peer needs a login too. Ask separately, on the one
+	// endpoint that is also always public for exactly this reason.
+	status, err := fetchPeerAuthStatus(r.Context(), peer.URL)
+	if err != nil {
+		writeError(w, fmt.Errorf("check peer access protection: %w", err))
+		return
+	}
+	if status.Enabled {
+		if request.Password == "" {
+			// Distinguishable from a generic failure so the Add PC dialog
+			// can reveal a password field and resubmit, instead of just
+			// reporting that the PC could not be added.
+			writeJSON(w, http.StatusUnauthorized, map[string]any{
+				"error":                  "that PC requires its access password",
+				"peer_password_required": true,
+			})
+			return
+		}
+		salt, err := base64.RawURLEncoding.DecodeString(status.Salt)
+		if err != nil {
+			writeError(w, errors.New("peer returned an invalid salt"))
+			return
+		}
+		verifier := access.DeriveVerifier(request.Password, salt)
+		token, err := peerLogin(r.Context(), peer.URL, verifier)
+		if err != nil {
+			writeError(w, fmt.Errorf("log in to that PC: %w", err))
+			return
+		}
+		// peer.Verifier is what makes every later proxied call to this
+		// peer able to re-authenticate on its own — see peerAuthTransport.
+		peer.Verifier = base64.RawURLEncoding.EncodeToString(verifier)
+		if token != "" {
+			s.peerSessions.set(strings.TrimSuffix(peer.URL, "/"), token)
+		}
+	}
+
 	if err := s.peers.Add(peer); err != nil {
 		writeError(w, err)
 		return

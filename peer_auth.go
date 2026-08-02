@@ -1,0 +1,224 @@
+package main
+
+import (
+	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"net/http"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/hypernewbie/eta/internal/access"
+	"github.com/hypernewbie/eta/internal/peers"
+)
+
+// A peer that has set its own access password is, from this server's
+// point of view, just another login: someone here typed that peer's
+// password once when adding it (see handlePeerAdd), this server derived
+// and kept the same PBKDF2 verifier the peer's own browser would have
+// derived, and every proxied request presents that peer's own session
+// cookie. There is no separate "peer key" concept — a peer is a client
+// who knows the password, same as a person at a browser.
+
+// peerSessionCache holds session tokens this server has obtained by
+// logging in to *other* Eta instances' access passwords, keyed by peer
+// URL. It is purely a performance cache: everything needed to rebuild an
+// entry lives in the persisted peer record's Verifier field, so losing
+// this cache — a restart, or the peer itself restarting and dropping its
+// own in-memory sessions — costs one extra login round trip, not a lost
+// connection or a re-prompt for the password.
+type peerSessionCache struct {
+	mu       sync.Mutex
+	sessions map[string]string
+}
+
+func newPeerSessionCache() *peerSessionCache {
+	return &peerSessionCache{sessions: make(map[string]string)}
+}
+
+func (c *peerSessionCache) get(peerURL string) string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.sessions[peerURL]
+}
+
+func (c *peerSessionCache) set(peerURL, token string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if token == "" {
+		delete(c.sessions, peerURL)
+		return
+	}
+	c.sessions[peerURL] = token
+}
+
+// peerClient returns an *http.Client whose outbound requests to this one
+// peer carry a cached session, and transparently re-authenticate once on
+// a 401 if a verifier is on file for it. Every server-to-server call this
+// server makes on a peer's own /api/* surface should be built with this,
+// not a bare &http.Client{} — that surface is exactly what a peer with a
+// password now rejects anonymously.
+func (s *server) peerClient(peer peers.Peer, timeout time.Duration) *http.Client {
+	return &http.Client{
+		Timeout:   timeout,
+		Transport: s.peerTransport(peer.URL, peer.Verifier),
+	}
+}
+
+// peerClientForURL is for the handful of call sites that address a
+// destination by bare URL rather than an internal.peers.Peer — a managed
+// source pushing to a caller-supplied destination, or a persisted
+// transfer job that only kept the URL. It looks the URL up against the
+// peer inventory on a best-effort basis to recover a stored verifier; a
+// destination that both requires a password and was never enrolled here
+// has no credential to use and proceeds anonymously, exactly as every
+// destination did before this feature existed.
+func (s *server) peerClientForURL(peerURL string, timeout time.Duration) *http.Client {
+	var verifier string
+	if s.peers != nil {
+		if peer, found, err := s.peers.Find(peerURL); err == nil && found {
+			verifier = peer.Verifier
+		}
+	}
+	return &http.Client{
+		Timeout:   timeout,
+		Transport: s.peerTransport(peerURL, verifier),
+	}
+}
+
+func (s *server) peerTransport(peerURL, verifierB64 string) http.RoundTripper {
+	var verifier []byte
+	if verifierB64 != "" {
+		if decoded, err := base64.RawURLEncoding.DecodeString(verifierB64); err == nil {
+			verifier = decoded
+		}
+	}
+	return &peerAuthTransport{
+		base:     http.DefaultTransport,
+		peerURL:  strings.TrimSuffix(peerURL, "/"),
+		verifier: verifier,
+		cache:    s.peerSessions,
+	}
+}
+
+// peerAuthTransport attaches this server's cached session for a peer to
+// every outbound request, and re-authenticates once on a 401 if a
+// verifier is on file for that peer.
+type peerAuthTransport struct {
+	base     http.RoundTripper
+	peerURL  string
+	verifier []byte // nil: peer has no password on file, or none is known
+	cache    *peerSessionCache
+}
+
+func (t *peerAuthTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	if token := t.cache.get(t.peerURL); token != "" {
+		req.Header.Set("Cookie", access.SessionCookie+"="+token)
+	}
+	response, err := t.base.RoundTrip(req)
+	if err != nil || response.StatusCode != http.StatusUnauthorized || len(t.verifier) == 0 {
+		return response, err
+	}
+	// Exactly one retry, not a loop: a peer that rejects a *correct*
+	// verifier — its password changed since this one was cached — must
+	// fail fast rather than being hammered with relogin attempts.
+	if req.Body != nil && req.GetBody == nil {
+		// This request's body was already consumed and cannot be safely
+		// replayed (a caller built it from a reader that isn't one of the
+		// GetBody-populating types net/http recognises). Surface the
+		// original 401 rather than resend a request with an empty body.
+		return response, nil
+	}
+	response.Body.Close()
+	token, loginErr := peerLogin(req.Context(), t.peerURL, t.verifier)
+	if loginErr != nil || token == "" {
+		return t.base.RoundTrip(req)
+	}
+	t.cache.set(t.peerURL, token)
+	retry := req.Clone(req.Context())
+	if req.GetBody != nil {
+		body, err := req.GetBody()
+		if err != nil {
+			return t.base.RoundTrip(req)
+		}
+		retry.Body = body
+	}
+	retry.Header.Set("Cookie", access.SessionCookie+"="+token)
+	return t.base.RoundTrip(retry)
+}
+
+// peerAuthStatus mirrors the JSON /api/auth/status answers with — just
+// the fields this server needs to log in.
+type peerAuthStatus struct {
+	Enabled    bool   `json:"enabled"`
+	Iterations int    `json:"iterations"`
+	Salt       string `json:"salt"`
+	Challenge  string `json:"challenge"`
+}
+
+func fetchPeerAuthStatus(ctx context.Context, peerURL string) (peerAuthStatus, error) {
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimSuffix(peerURL, "/")+"/api/auth/status", nil)
+	if err != nil {
+		return peerAuthStatus{}, err
+	}
+	response, err := (&http.Client{Timeout: 10 * time.Second}).Do(request)
+	if err != nil {
+		return peerAuthStatus{}, err
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return peerAuthStatus{}, fmt.Errorf("peer auth status: %s", response.Status)
+	}
+	var status peerAuthStatus
+	if err := json.NewDecoder(response.Body).Decode(&status); err != nil {
+		return peerAuthStatus{}, err
+	}
+	return status, nil
+}
+
+// peerLogin authenticates to a peer using a verifier already derived —
+// either one just computed from a freshly typed password (enrolling a
+// peer) or one loaded back from the persisted peer record (routine
+// re-authentication) — and returns the session token the peer issues. It
+// never sees or stores the peer's plaintext password.
+func peerLogin(ctx context.Context, peerURL string, verifier []byte) (string, error) {
+	status, err := fetchPeerAuthStatus(ctx, peerURL)
+	if err != nil {
+		return "", err
+	}
+	if !status.Enabled {
+		return "", nil // this peer has no password: nothing to log in to
+	}
+	mac := hmac.New(sha256.New, verifier)
+	_, _ = mac.Write([]byte(status.Challenge))
+	proof := base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
+
+	body, err := json.Marshal(map[string]string{"challenge": status.Challenge, "proof": proof})
+	if err != nil {
+		return "", err
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimSuffix(peerURL, "/")+"/api/auth/login", strings.NewReader(string(body)))
+	if err != nil {
+		return "", err
+	}
+	request.Header.Set("Content-Type", "application/json")
+	response, err := (&http.Client{Timeout: 10 * time.Second}).Do(request)
+	if err != nil {
+		return "", err
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return "", access.ErrUnauthorized
+	}
+	for _, cookie := range response.Cookies() {
+		if cookie.Name == access.SessionCookie {
+			return cookie.Value, nil
+		}
+	}
+	return "", errors.New("peer did not issue a session")
+}

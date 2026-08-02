@@ -18,6 +18,13 @@ type Peer struct {
 	ID     string `json:"id,omitempty"`
 	Accent string `json:"accent,omitempty"`
 	Glyph  string `json:"glyph,omitempty"`
+	// Verifier is this peer's own PBKDF2 access-password verifier,
+	// captured once when it was enrolled with a password (see
+	// handlePeerAdd), never the plaintext. It authenticates this server
+	// to that peer on every proxied request going forward — a peer with
+	// a password is just another client who knows it, and this is how
+	// this server proves it does too, without asking again each time.
+	Verifier string `json:"verifier,omitempty"`
 }
 type Store struct {
 	path string

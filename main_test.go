@@ -389,10 +389,16 @@ func TestRemoteListProxyUsesEnrolledPeer(t *testing.T) {
 
 func TestPeerEnrollmentProbesIdentity(t *testing.T) {
 	peerServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/identity" {
+		switch r.URL.Path {
+		case "/api/identity":
+			_, _ = w.Write([]byte(`{"id":"peer-id","hostname":"peer","accent":"blue","glyph":"𓀀"}`))
+		case "/api/auth/status":
+			// Enrolling a peer also asks whether it needs a password (see
+			// handlePeerAdd); an unprotected peer answers like this.
+			_, _ = w.Write([]byte(`{"enabled":false}`))
+		default:
 			t.Fatalf("path = %s", r.URL.Path)
 		}
-		_, _ = w.Write([]byte(`{"id":"peer-id","hostname":"peer","accent":"blue","glyph":"𓀀"}`))
 	}))
 	defer peerServer.Close()
 	s, err := newServer([]string{t.TempDir()})
