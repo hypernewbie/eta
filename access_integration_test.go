@@ -35,6 +35,18 @@ func setPassword(t *testing.T, s *server, password string) []byte {
 	return verifier
 }
 
+// peerVerifier derives the verifier a browser would send for password
+// against the fixed salt setPassword always configures receivers with,
+// base64url-encoded exactly as the client and the /api/peers* endpoints
+// exchange it. Tests build request bodies with this instead of a
+// "password" field, matching what actually crosses the wire now that
+// derivation happens in the browser (see derivePeerVerifier in
+// web/app.ts and handlePeerAuthStatus in main.go).
+func peerVerifier(password string) string {
+	salt := []byte("0123456789abcdef")
+	return base64.RawURLEncoding.EncodeToString(access.DeriveVerifier(password, salt))
+}
+
 // TestAlreadyEnrolledPeerTurningOnAPasswordIsRecoverable is the exact
 // scenario a password feature added after peers already exist has to get
 // right: A and B are already linked with no password anywhere. B turns
@@ -92,7 +104,7 @@ func TestAlreadyEnrolledPeerTurningOnAPasswordIsRecoverable(t *testing.T) {
 
 	// Fixed without removing and re-adding the peer: the credential
 	// endpoint updates the existing entry in place.
-	credential := httptest.NewRequest(http.MethodPost, "/api/peers/credential", strings.NewReader(`{"url":"`+receiverHTTP.URL+`","password":"newly-added-secret"}`))
+	credential := httptest.NewRequest(http.MethodPost, "/api/peers/credential", strings.NewReader(`{"url":"`+receiverHTTP.URL+`","verifier":"`+peerVerifier("newly-added-secret")+`"}`))
 	credW := httptest.NewRecorder()
 	coordinator.routes().ServeHTTP(credW, credential)
 	if credW.Code != http.StatusOK {
@@ -111,7 +123,7 @@ func TestAlreadyEnrolledPeerTurningOnAPasswordIsRecoverable(t *testing.T) {
 	// "succeed" and must not corrupt the working credential already on
 	// file... but note it does overwrite it, by design (this is an
 	// explicit edit action) — verify it reports failure rather than 200.
-	wrongCredential := httptest.NewRequest(http.MethodPost, "/api/peers/credential", strings.NewReader(`{"url":"`+receiverHTTP.URL+`","password":"nope"}`))
+	wrongCredential := httptest.NewRequest(http.MethodPost, "/api/peers/credential", strings.NewReader(`{"url":"`+receiverHTTP.URL+`","verifier":"`+peerVerifier("nope")+`"}`))
 	wrongW := httptest.NewRecorder()
 	coordinator.routes().ServeHTTP(wrongW, wrongCredential)
 	if wrongW.Code == http.StatusOK {
@@ -132,7 +144,7 @@ func TestPeerVerifierNeverReachesTheBrowser(t *testing.T) {
 	}
 	coordinator.peers = peers.New(filepath.Join(t.TempDir(), "peers.json"))
 
-	add := httptest.NewRequest(http.MethodPost, "/api/peers", strings.NewReader(`{"url":"`+receiverHTTP.URL+`","password":"receiver-secret"}`))
+	add := httptest.NewRequest(http.MethodPost, "/api/peers", strings.NewReader(`{"url":"`+receiverHTTP.URL+`","verifier":"`+peerVerifier("receiver-secret")+`"}`))
 	addW := httptest.NewRecorder()
 	coordinator.routes().ServeHTTP(addW, add)
 	if addW.Code != http.StatusCreated {
@@ -155,11 +167,38 @@ func TestPeerVerifierNeverReachesTheBrowser(t *testing.T) {
 		t.Fatalf("GET /api/peers response leaked a verifier: %s", listW.Body.String())
 	}
 
-	credential := httptest.NewRequest(http.MethodPost, "/api/peers/credential", strings.NewReader(`{"url":"`+receiverHTTP.URL+`","password":"receiver-secret"}`))
+	credential := httptest.NewRequest(http.MethodPost, "/api/peers/credential", strings.NewReader(`{"url":"`+receiverHTTP.URL+`","verifier":"`+peerVerifier("receiver-secret")+`"}`))
 	credW := httptest.NewRecorder()
 	coordinator.routes().ServeHTTP(credW, credential)
 	if strings.Contains(credW.Body.String(), "verifier") {
 		t.Fatalf("POST /api/peers/credential response leaked a verifier: %s", credW.Body.String())
+	}
+}
+
+// TestPeerAddIgnoresAPlaintextPasswordField locks in the fix: a
+// "password" field alone must not authenticate a peer add. Only a
+// pre-derived "verifier" does — the browser derives it (see
+// derivePeerVerifier in web/app.ts), and this server never accepts nor
+// looks for a plaintext password in this request at all.
+func TestPeerAddIgnoresAPlaintextPasswordField(t *testing.T) {
+	receiverHTTP := newPasswordProtectedReceiver(t)
+	coordinator, err := newServer([]string{t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	coordinator.peers = peers.New(filepath.Join(t.TempDir(), "peers.json"))
+
+	req := httptest.NewRequest(http.MethodPost, "/api/peers", strings.NewReader(`{"url":"`+receiverHTTP.URL+`","password":"receiver-secret"}`))
+	w := httptest.NewRecorder()
+	coordinator.routes().ServeHTTP(w, req)
+	// A correct plaintext password with no "verifier" field is treated
+	// exactly like no credential at all: flagged, not accepted.
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("a plaintext password field authenticated the peer add: got %d %s", w.Code, w.Body.String())
+	}
+	var flagged map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &flagged); err != nil || flagged["peer_password_required"] != true {
+		t.Fatalf("expected peer_password_required, got %s", w.Body.String())
 	}
 }
 
@@ -353,7 +392,7 @@ func TestPeerAddWithWrongPasswordFailsAndEnrollsNothing(t *testing.T) {
 	}
 	coordinator.peers = peers.New(filepath.Join(t.TempDir(), "peers.json"))
 
-	wrong := httptest.NewRequest(http.MethodPost, "/api/peers", strings.NewReader(`{"url":"`+receiverHTTP.URL+`","password":"nope"}`))
+	wrong := httptest.NewRequest(http.MethodPost, "/api/peers", strings.NewReader(`{"url":"`+receiverHTTP.URL+`","verifier":"`+peerVerifier("nope")+`"}`))
 	w := httptest.NewRecorder()
 	coordinator.routes().ServeHTTP(w, wrong)
 	if w.Code == http.StatusCreated {
@@ -372,7 +411,7 @@ func TestPeerAddWithCorrectPasswordEnrollsAndStoresOnlyAVerifier(t *testing.T) {
 	}
 	coordinator.peers = peers.New(filepath.Join(t.TempDir(), "peers.json"))
 
-	right := httptest.NewRequest(http.MethodPost, "/api/peers", strings.NewReader(`{"url":"`+receiverHTTP.URL+`","password":"receiver-secret"}`))
+	right := httptest.NewRequest(http.MethodPost, "/api/peers", strings.NewReader(`{"url":"`+receiverHTTP.URL+`","verifier":"`+peerVerifier("receiver-secret")+`"}`))
 	w := httptest.NewRecorder()
 	coordinator.routes().ServeHTTP(w, right)
 	if w.Code != http.StatusCreated {
@@ -412,7 +451,7 @@ func TestProxiedCallReauthenticatesAfterPeerSessionIsLost(t *testing.T) {
 		t.Fatal(err)
 	}
 	coordinator.peers = peers.New(filepath.Join(t.TempDir(), "peers.json"))
-	add := httptest.NewRequest(http.MethodPost, "/api/peers", strings.NewReader(`{"url":"`+receiverHTTP.URL+`","password":"receiver-secret"}`))
+	add := httptest.NewRequest(http.MethodPost, "/api/peers", strings.NewReader(`{"url":"`+receiverHTTP.URL+`","verifier":"`+peerVerifier("receiver-secret")+`"}`))
 	w := httptest.NewRecorder()
 	coordinator.routes().ServeHTTP(w, add)
 	if w.Code != http.StatusCreated {

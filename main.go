@@ -389,6 +389,7 @@ func (s *server) routes() http.Handler {
 	mux.HandleFunc("GET /api/remote/file", s.handleRemoteFile)
 	mux.HandleFunc("GET /api/remote/preview", s.handleRemotePreview)
 	mux.HandleFunc("GET /api/remote/thumbnail", s.handleRemoteThumbnail)
+	mux.HandleFunc("GET /api/peers/auth-status", s.handlePeerAuthStatus)
 	mux.HandleFunc("POST /api/peers", s.handlePeerAdd)
 	mux.HandleFunc("POST /api/peers/credential", s.handlePeerCredential)
 	mux.HandleFunc("DELETE /api/peers", s.handlePeerDelete)
@@ -1632,17 +1633,55 @@ func (s *server) refreshPeerIdentities(ctx context.Context, items []peers.Peer) 
 	}
 	wait.Wait()
 }
+
+// handlePeerAuthStatus lets the browser check whether an *enrolled or
+// about-to-be-enrolled* peer needs a password, and fetch the KDF
+// parameters (salt, iterations) to derive a verifier against — without
+// the browser ever contacting that peer directly, which would need CORS
+// on a login endpoint and would try to set that peer's session cookie
+// across origins, defeating the SameSite=Strict this server issues its
+// own sessions with. This server proxies the one read; the derivation
+// still happens client-side, same as this server's own login.
+func (s *server) handlePeerAuthStatus(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	peerURL := r.URL.Query().Get("url")
+	if peerURL == "" {
+		writeError(w, errors.New("missing url"))
+		return
+	}
+	status, err := fetchPeerAuthStatus(r.Context(), peerURL)
+	if err != nil {
+		writeError(w, fmt.Errorf("check peer access protection: %w", err))
+		return
+	}
+	// The challenge is this endpoint's own one-time login challenge for
+	// that peer, unused by anything here (enrollment logs in separately,
+	// with its own fresh one) and not secret — but omitted anyway, since
+	// handing it out for no reason invites a caller to wonder what it is
+	// for.
+	writeJSON(w, http.StatusOK, map[string]any{
+		"enabled":    status.Enabled,
+		"iterations": status.Iterations,
+		"salt":       status.Salt,
+	})
+}
+
 func (s *server) handlePeerAdd(w http.ResponseWriter, r *http.Request) {
 	if s.peers == nil {
 		writeError(w, errors.New("peer inventory is unavailable"))
 		return
 	}
-	// password is transient: used once here to derive a verifier and log
-	// in, then discarded. Only the derived verifier is ever persisted (as
-	// peer.Verifier), never this field.
+	// Verifier here is one the *browser* already derived from that peer's
+	// password (see handlePeerAuthStatus) — never the password itself, so
+	// it is transient in the same sense as request.Peer.Verifier below:
+	// this handler only ever accepts a credential it can attribute to its
+	// own successful login, not one carried in from the request.
 	var request struct {
 		peers.Peer
-		Password string `json:"password,omitempty"`
+		Verifier string `json:"verifier,omitempty"`
 	}
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&request); err != nil {
 		writeError(w, err)
@@ -1650,10 +1689,10 @@ func (s *server) handlePeerAdd(w http.ResponseWriter, r *http.Request) {
 	}
 	peer := request.Peer
 	// Verifier is only ever set by this handler's own successful login
-	// below, never accepted from the request: a client that could plant
-	// an arbitrary value here would gain nothing against a peer that
-	// actually checks it, but it should not be possible to persist an
-	// unverified credential at all.
+	// below, never accepted from the request as-is: a client that could
+	// plant an arbitrary value here would gain nothing against a peer
+	// that actually checks it, but it should not be possible to persist
+	// an unverified credential at all.
 	peer.Verifier = ""
 	identity, err := probePeer(r.Context(), peer.URL)
 	if err != nil {
@@ -1662,7 +1701,7 @@ func (s *server) handlePeerAdd(w http.ResponseWriter, r *http.Request) {
 	}
 	peer.ID, peer.Name, peer.Accent, peer.Glyph = identity.ID, identity.Hostname, identity.Accent, identity.Glyph
 
-	peer, ok := s.authenticateToPeer(w, r, peer, request.Password)
+	peer, ok := s.authenticateToPeer(w, r, peer, request.Verifier)
 	if !ok {
 		return
 	}
@@ -1680,7 +1719,13 @@ func (s *server) handlePeerAdd(w http.ResponseWriter, r *http.Request) {
 // can prompt rather than just report failure. Shared by handlePeerAdd
 // (a new peer) and handlePeerCredential (an already-enrolled one whose
 // peer turned password protection on after it was added).
-func (s *server) authenticateToPeer(w http.ResponseWriter, r *http.Request, peer peers.Peer, password string) (peers.Peer, bool) {
+// authenticateToPeer takes a verifier the *browser* already derived, not
+// a password: the browser fetches this peer's salt from
+// handlePeerAuthStatus below and runs the same PBKDF2 it runs for this
+// server's own login, so a peer's password never crosses the wire in
+// plaintext either — including to this server itself, not just beyond
+// it.
+func (s *server) authenticateToPeer(w http.ResponseWriter, r *http.Request, peer peers.Peer, verifierB64 string) (peers.Peer, bool) {
 	// /api/identity stays public regardless of a peer's password (see
 	// access_handlers.go's public-path list), so probing it during
 	// enrollment never told us whether this peer needs a login too. Ask
@@ -1699,7 +1744,7 @@ func (s *server) authenticateToPeer(w http.ResponseWriter, r *http.Request, peer
 		peer.Verifier = ""
 		return peer, true
 	}
-	if password == "" {
+	if verifierB64 == "" {
 		// Distinguishable from a generic failure so the caller can reveal
 		// a password field and resubmit, instead of just reporting that
 		// the PC could not be reached.
@@ -1709,12 +1754,11 @@ func (s *server) authenticateToPeer(w http.ResponseWriter, r *http.Request, peer
 		})
 		return peer, false
 	}
-	salt, err := base64.RawURLEncoding.DecodeString(status.Salt)
-	if err != nil {
-		writeError(w, errors.New("peer returned an invalid salt"))
+	verifier, err := base64.RawURLEncoding.DecodeString(verifierB64)
+	if err != nil || len(verifier) != 32 {
+		writeError(w, errors.New("invalid peer credential"))
 		return peer, false
 	}
-	verifier := access.DeriveVerifier(password, salt)
 	token, err := peerLogin(r.Context(), peer.URL, verifier)
 	if err != nil {
 		writeError(w, fmt.Errorf("log in to that PC: %w", err))
@@ -1722,7 +1766,7 @@ func (s *server) authenticateToPeer(w http.ResponseWriter, r *http.Request, peer
 	}
 	// peer.Verifier is what makes every later proxied call to this peer
 	// able to re-authenticate on its own — see peerAuthTransport.
-	peer.Verifier = base64.RawURLEncoding.EncodeToString(verifier)
+	peer.Verifier = verifierB64
 	if token != "" {
 		s.peerSessions.set(strings.TrimSuffix(peer.URL, "/"), token)
 	}
@@ -1744,9 +1788,11 @@ func (s *server) handlePeerCredential(w http.ResponseWriter, r *http.Request) {
 		writeError(w, errors.New("peer inventory is unavailable"))
 		return
 	}
+	// Verifier, not password — see handlePeerAuthStatus and
+	// authenticateToPeer.
 	var request struct {
 		URL      string `json:"url"`
-		Password string `json:"password"`
+		Verifier string `json:"verifier"`
 	}
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&request); err != nil {
 		writeError(w, err)
@@ -1761,7 +1807,7 @@ func (s *server) handlePeerCredential(w http.ResponseWriter, r *http.Request) {
 		writeError(w, errors.New("unknown peer"))
 		return
 	}
-	peer, ok := s.authenticateToPeer(w, r, peer, request.Password)
+	peer, ok := s.authenticateToPeer(w, r, peer, request.Verifier)
 	if !ok {
 		return
 	}

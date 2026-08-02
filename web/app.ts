@@ -597,6 +597,25 @@ function parentPath(view: ExplorerView) {
   return view.state.path.split("/").filter(Boolean).slice(0, -1).join("/");
 }
 
+// Derives a verifier for a *peer's* password the same way this server's
+// own login does: fetch that peer's KDF parameters through this server
+// (never contacted directly — see handlePeerAuthStatus's doc comment for
+// why), then run PBKDF2 in the browser. The peer's password reaches
+// neither the wire nor even this server itself in plaintext; only the
+// derived verifier is ever sent, exactly like this server's own login.
+// Returns "" if the peer turns out not to need a password at all.
+async function derivePeerVerifier(
+  peerURL: string,
+  password: string,
+): Promise<string> {
+  const status = await api(
+    `/api/peers/auth-status?url=${encodeURIComponent(peerURL)}`,
+  );
+  if (!status.enabled) return "";
+  const verifier = await accessDeriveVerifier(password, status as AccessStatus);
+  return accessBytesToBase64URL(verifier);
+}
+
 // Peer credential prompts are cached per URL so two requests that both
 // fail at once (a remote explorer window firing roots + list together)
 // prompt for that PC's password once, not twice.
@@ -612,10 +631,11 @@ async function reauthenticatePeer(peerURL: string): Promise<boolean> {
     );
     if (!password) return false;
     try {
+      const verifier = await derivePeerVerifier(peerURL, password);
       const response = await fetch("/api/peers/credential", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ url: peerURL, password }),
+        body: JSON.stringify({ url: peerURL, verifier }),
       });
       if (!response.ok) {
         const body = await response.json().catch(() => ({}));
@@ -623,8 +643,8 @@ async function reauthenticatePeer(peerURL: string): Promise<boolean> {
         return false;
       }
       return true;
-    } catch {
-      showToast(`Could not reach ${label}`);
+    } catch (error) {
+      showToast((error as Error).message || `Could not reach ${label}`);
       return false;
     }
   })();
@@ -3570,10 +3590,14 @@ $("#download-button").addEventListener("click", () => {
 $("#copy-button").addEventListener("click", copyText);
 $("#close-dialog").addEventListener("click", () => $("#preview-dialog").hide());
 async function addPeer(url: string, password?: string) {
+  // Derived here, before that peer is even known to exist as an enrolled
+  // record — the password itself never leaves this function, and never
+  // reaches this server, let alone that peer.
+  const verifier = password ? await derivePeerVerifier(url, password) : "";
   const response = await fetch("/api/peers", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(password ? { url, password } : { url }),
+    body: JSON.stringify(verifier ? { url, verifier } : { url }),
   });
   const body = await response.json().catch(() => ({}));
   if (!response.ok) {

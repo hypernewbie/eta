@@ -76,12 +76,14 @@ func ParsePasswordHash(encoded string) (*passwordRecord, error) {
 	return &passwordRecord{Salt: salt, Verifier: verifier}, nil
 }
 
-// DeriveVerifier runs the same PBKDF2-HMAC-SHA256 the browser runs, for
-// the one caller that has to do it server-side: logging in to a peer on
-// the user's behalf (see internal/peers' credential cache). It is never
-// used against Eta's own login, which only ever sees a verifier the
-// browser already derived — the raw password does not pass through this
-// server for its own login, only for a peer's.
+// DeriveVerifier runs the same PBKDF2-HMAC-SHA256 the browser runs. No
+// production code path calls it: a peer's password is derived in the
+// browser too (see web/app.ts's derivePeerVerifier, and
+// handlePeerAuthStatus in main.go, which exists so the browser can fetch
+// a peer's salt without contacting that peer directly). A password does
+// not pass through this server in plaintext for its own login or for a
+// peer's. Kept as an exported function because tests need a Go-side way
+// to construct a valid verifier without a browser to derive one.
 func DeriveVerifier(password string, salt []byte) []byte {
 	return pbkdf2.Key([]byte(password), salt, PasswordHashIterations, passwordVerifierBytes, sha256.New)
 }
