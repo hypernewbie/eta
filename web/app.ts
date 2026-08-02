@@ -12,6 +12,16 @@ interface Window {
   WinBox?: new (options: WinBoxOptions) => WinBoxInstance;
   Terminal?: new (options: Record<string, unknown>) => XTermInstance;
   FitAddon?: { FitAddon: new () => XTermFitAddon };
+  NobleHashes?: {
+    pbkdf2Async: (
+      hash: unknown,
+      password: string | Uint8Array,
+      salt: Uint8Array,
+      opts: { c: number; dkLen: number; asyncTick?: number },
+    ) => Promise<Uint8Array>;
+    hmac: (hash: unknown, key: Uint8Array, message: Uint8Array) => Uint8Array;
+    sha256: unknown;
+  };
 }
 
 type WinBoxOptions = {
@@ -2107,6 +2117,287 @@ async function restoreFileWindow(restored: PersistedWindow) {
   }
 }
 
+// ── Access password ─────────────────────────────────────────────────────
+// Optional login, off unless a password is set (see AGENTS.md's product
+// rules: a Tailscale/LAN trust boundary, not an application login, is
+// the default — this is for the case where that boundary alone is not
+// enough). The password itself never reaches the server: the browser
+// derives a PBKDF2 verifier and the server only ever sees that. The KDF
+// runs via the vendored @noble/hashes bundle rather than SubtleCrypto,
+// because SubtleCrypto is unavailable on the plain-HTTP LAN origins Eta
+// is actually served from (window.crypto.subtle only exists in a secure
+// context — https, or localhost).
+const ACCESS_CREDENTIAL_KEY = "eta_access_credential_v1";
+const ACCESS_PASSWORD_MIN_LENGTH = 8;
+
+function accessBytesToBase64URL(bytes: Uint8Array): string {
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary)
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/, "");
+}
+function accessBase64URLToBytes(value: string): Uint8Array {
+  if (typeof value !== "string" || !/^[A-Za-z0-9_-]+$/.test(value)) {
+    throw new Error("invalid saved access credential");
+  }
+  const padded =
+    value.replace(/-/g, "+").replace(/_/g, "/") +
+    "=".repeat((4 - (value.length % 4)) % 4);
+  const binary = atob(padded);
+  return Uint8Array.from(binary, (char) => char.charCodeAt(0));
+}
+
+interface AccessStatus {
+  enabled: boolean;
+  authenticated?: boolean;
+  version?: string;
+  algorithm?: string;
+  iterations?: number;
+  salt?: string;
+  challenge?: string;
+}
+function accessStatusUsable(status: AccessStatus): boolean {
+  return (
+    !!status &&
+    status.enabled === true &&
+    status.version === "v1" &&
+    status.algorithm === "pbkdf2-sha256" &&
+    Number.isInteger(status.iterations) &&
+    (status.iterations as number) > 0 &&
+    typeof status.salt === "string" &&
+    typeof status.challenge === "string"
+  );
+}
+async function accessGetStatus(): Promise<AccessStatus> {
+  const response = await fetch("/api/auth/status", { cache: "no-store" });
+  if (!response.ok) throw new Error("unable to check access protection");
+  const status = await response.json();
+  if (status.enabled && !accessStatusUsable(status)) {
+    throw new Error("server returned invalid access protection settings");
+  }
+  return status;
+}
+async function accessDeriveVerifier(
+  password: string,
+  status: AccessStatus,
+): Promise<Uint8Array> {
+  if (
+    typeof password !== "string" ||
+    password.length < ACCESS_PASSWORD_MIN_LENGTH
+  ) {
+    throw new Error(
+      `Password must be at least ${ACCESS_PASSWORD_MIN_LENGTH} characters`,
+    );
+  }
+  if (!window.NobleHashes) throw new Error("password support did not load");
+  const salt = accessBase64URLToBytes(status.salt!);
+  return window.NobleHashes.pbkdf2Async(
+    window.NobleHashes.sha256,
+    password,
+    salt,
+    { c: status.iterations!, dkLen: 32, asyncTick: 10 },
+  );
+}
+function accessStoreCredential(status: AccessStatus, verifier: Uint8Array) {
+  try {
+    localStorage.setItem(
+      ACCESS_CREDENTIAL_KEY,
+      JSON.stringify({
+        version: status.version,
+        algorithm: status.algorithm,
+        iterations: status.iterations,
+        salt: status.salt,
+        verifier: accessBytesToBase64URL(verifier),
+      }),
+    );
+  } catch {
+    // A cookie session still works when localStorage is blocked; the
+    // user is only asked for the password again once that session
+    // expires.
+  }
+}
+function accessClearCredential() {
+  try {
+    localStorage.removeItem(ACCESS_CREDENTIAL_KEY);
+  } catch {
+    // Nothing to clear if storage was already unavailable.
+  }
+}
+function accessSavedVerifier(status: AccessStatus): Uint8Array | null {
+  try {
+    const saved = JSON.parse(
+      localStorage.getItem(ACCESS_CREDENTIAL_KEY) || "null",
+    );
+    if (
+      !saved ||
+      saved.version !== status.version ||
+      saved.algorithm !== status.algorithm ||
+      saved.iterations !== status.iterations ||
+      saved.salt !== status.salt
+    ) {
+      accessClearCredential();
+      return null;
+    }
+    const verifier = accessBase64URLToBytes(saved.verifier);
+    return verifier.length === 32 ? verifier : null;
+  } catch {
+    accessClearCredential();
+    return null;
+  }
+}
+async function accessLogin(
+  status: AccessStatus,
+  verifier: Uint8Array,
+): Promise<boolean> {
+  if (!window.NobleHashes) return false;
+  const proof = accessBytesToBase64URL(
+    window.NobleHashes.hmac(
+      window.NobleHashes.sha256,
+      verifier,
+      new TextEncoder().encode(status.challenge!),
+    ),
+  );
+  const response = await fetch("/api/auth/login", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ challenge: status.challenge, proof }),
+  });
+  return response.ok;
+}
+
+function accessShowUnlockPrompt(): Promise<void> {
+  return new Promise((resolve) => {
+    const overlay = document.createElement("div");
+    overlay.className = "access-auth-overlay";
+    overlay.setAttribute("role", "dialog");
+    overlay.setAttribute("aria-modal", "true");
+    overlay.setAttribute("aria-labelledby", "access-auth-title");
+
+    const dialog = document.createElement("form");
+    dialog.className = "access-auth-dialog";
+    dialog.noValidate = true;
+
+    const title = document.createElement("h1");
+    title.id = "access-auth-title";
+    title.textContent = "η Sign in to Eta";
+    const subtitle = document.createElement("p");
+    subtitle.className = "access-auth-subtitle";
+    subtitle.textContent = "Enter this machine's access password to continue.";
+    const label = document.createElement("label");
+    label.htmlFor = "access-auth-password";
+    label.textContent = "Password";
+    const input = document.createElement("input");
+    input.id = "access-auth-password";
+    input.type = "password";
+    input.autocomplete = "current-password";
+    input.required = true;
+    const error = document.createElement("div");
+    error.className = "access-auth-error";
+    error.setAttribute("role", "alert");
+    const submit = document.createElement("button");
+    submit.className = "btn-primary";
+    submit.type = "submit";
+    submit.textContent = "Sign in";
+    dialog.append(title, subtitle, label, input, error, submit);
+
+    dialog.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      error.textContent = "";
+      submit.disabled = true;
+      try {
+        const status = await accessGetStatus();
+        if (!status.enabled) {
+          overlay.remove();
+          resolve();
+          return;
+        }
+        const verifier = await accessDeriveVerifier(input.value, status);
+        if (!(await accessLogin(status, verifier))) {
+          error.textContent = "Wrong password";
+          input.select();
+          return;
+        }
+        accessStoreCredential(status, verifier);
+        input.value = "";
+        overlay.remove();
+        resolve();
+      } catch (err) {
+        error.textContent =
+          err instanceof Error ? err.message : "Unable to unlock Eta";
+      } finally {
+        submit.disabled = false;
+      }
+    });
+
+    overlay.appendChild(dialog);
+    document.body.appendChild(overlay);
+    requestAnimationFrame(() => input.focus());
+  });
+}
+
+// Runs before boot() so no protected call and no desktop state fetch
+// starts before either the session cookie or a remembered derived
+// credential works.
+async function bootstrapAccessAuth(): Promise<void> {
+  const status = await accessGetStatus();
+  if (!status.enabled || status.authenticated === true) return;
+  const verifier = accessSavedVerifier(status);
+  if (verifier && (await accessLogin(status, verifier))) return;
+  await accessShowUnlockPrompt();
+}
+
+// Called from the settings dialog's Security section. The derived hash
+// is the only thing sent to the server; the raw password never leaves
+// this function.
+async function setAccessPassword(password: string): Promise<void> {
+  if (!window.crypto?.getRandomValues) {
+    throw new Error("this browser cannot securely generate a password salt");
+  }
+  const salt = new Uint8Array(16);
+  window.crypto.getRandomValues(salt);
+  const bootstrapStatus: AccessStatus = {
+    enabled: true,
+    version: "v1",
+    algorithm: "pbkdf2-sha256",
+    iterations: 600000,
+    salt: accessBytesToBase64URL(salt),
+  };
+  const verifier = await accessDeriveVerifier(password, bootstrapStatus);
+  const passwordHash = [
+    bootstrapStatus.version,
+    bootstrapStatus.algorithm,
+    String(bootstrapStatus.iterations),
+    bootstrapStatus.salt,
+    accessBytesToBase64URL(verifier),
+  ].join(".");
+  const response = await fetch("/api/auth/password", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ password_hash: passwordHash }),
+  });
+  if (!response.ok) {
+    throw new Error(
+      (await response.text()) || "unable to save access password",
+    );
+  }
+  accessStoreCredential(bootstrapStatus, verifier);
+}
+async function clearAccessPassword(): Promise<void> {
+  const response = await fetch("/api/auth/password", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ password_hash: "" }),
+  });
+  if (!response.ok) {
+    throw new Error(
+      (await response.text()) || "unable to clear access password",
+    );
+  }
+  accessClearCredential();
+}
+
 async function boot() {
   setTheme(localStorage.getItem("eta_theme_color") || "purple");
   try {
@@ -3065,32 +3356,148 @@ $("#download-button").addEventListener("click", () => {
 });
 $("#copy-button").addEventListener("click", copyText);
 $("#close-dialog").addEventListener("click", () => $("#preview-dialog").hide());
+async function addPeer(url: string, password?: string) {
+  const response = await fetch("/api/peers", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(password ? { url, password } : { url }),
+  });
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const message = body.error || `Request failed (${response.status})`;
+    const failure = new Error(message) as Error & {
+      peerPasswordRequired?: boolean;
+    };
+    if (body.peer_password_required) failure.peerPasswordRequired = true;
+    throw failure;
+  }
+  return body;
+}
+async function afterPeerAdded(peer: Peer) {
+  // The server knew about the new PC immediately; nothing on screen
+  // did, because enrolledPeers was only ever read at boot. So a peer
+  // added successfully stayed invisible in the computers menu and on
+  // the desktop until a reload.
+  try {
+    enrolledPeers = await api("/api/peers");
+  } catch {
+    enrolledPeers = [...enrolledPeers, peer];
+  }
+  // Rebuilds the dock, the computers menu and the desktop icons.
+  refreshTaskStrip();
+  showToast(`Added ${peer.name}`, "success");
+}
 $("#add-peer-button").addEventListener("click", async () => {
   const url = window.prompt("Eta peer URL (for example http://pc-b:7080):");
   if (!url) return;
   try {
-    const peer = await api("/api/peers", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ url }),
-    });
-    // The server knew about the new PC immediately; nothing on screen
-    // did, because enrolledPeers was only ever read at boot. So a peer
-    // added successfully stayed invisible in the computers menu and on
-    // the desktop until a reload.
-    try {
-      enrolledPeers = await api("/api/peers");
-    } catch {
-      enrolledPeers = [...enrolledPeers, peer];
+    await afterPeerAdded(await addPeer(url));
+    return;
+  } catch (error) {
+    if (!(error as { peerPasswordRequired?: boolean }).peerPasswordRequired) {
+      showToast((error as Error).message);
+      return;
     }
-    // Rebuilds the dock, the computers menu and the desktop icons.
-    refreshTaskStrip();
-    showToast(`Added ${peer.name}`, "success");
+  }
+  // That PC's own access password, not this one's: entered here once so
+  // this server can log in to it on this browser's behalf going forward
+  // (see peer_auth.go).
+  const password = window.prompt("That PC requires its access password:");
+  if (!password) return;
+  try {
+    await afterPeerAdded(await addPeer(url, password));
   } catch (error) {
     showToast((error as Error).message);
   }
 });
 $("#theme-button").addEventListener("click", () => $("#theme-dialog").show());
+
+// ── Settings dialog: Security (access password) ─────────────────────────
+let settingsAccessEnabled = false;
+async function refreshSettingsAccessState() {
+  try {
+    const status = await accessGetStatus();
+    settingsAccessEnabled = status.enabled;
+  } catch {
+    // Leave the last known state rather than guessing; the dialog is
+    // reopened rarely enough that this only matters if the server went
+    // away mid-session, which the rest of the UI already reports.
+  }
+  $("#settings-access-dot").classList.toggle("is-on", settingsAccessEnabled);
+  $("#settings-access-state").textContent = settingsAccessEnabled
+    ? "Enabled"
+    : "Disabled";
+  $("#settings-access-set").textContent = settingsAccessEnabled
+    ? "Update password"
+    : "Set password";
+  $("#settings-access-remove").hidden = !settingsAccessEnabled;
+  $("#settings-access-confirm-remove").hidden = true;
+}
+$("#settings-button").addEventListener("click", async () => {
+  await refreshSettingsAccessState();
+  $("#settings-dialog").show();
+});
+$("#settings-close").addEventListener("click", () =>
+  $("#settings-dialog").hide(),
+);
+
+function settingsAccessShowError(message: string) {
+  $("#settings-access-error").textContent = message;
+  $("#settings-access-new").classList.toggle("is-invalid", !!message);
+  $("#settings-access-confirm").classList.toggle("is-invalid", !!message);
+}
+[$("#settings-access-new"), $("#settings-access-confirm")].forEach((input) =>
+  input.addEventListener("input", () => settingsAccessShowError("")),
+);
+$("#settings-access-set").addEventListener("click", async () => {
+  const newPassword = ($("#settings-access-new") as HTMLInputElement).value;
+  const confirmPassword = ($("#settings-access-confirm") as HTMLInputElement)
+    .value;
+  if (!newPassword || newPassword.length < ACCESS_PASSWORD_MIN_LENGTH) {
+    settingsAccessShowError(
+      `At least ${ACCESS_PASSWORD_MIN_LENGTH} characters.`,
+    );
+    $("#settings-access-new").focus();
+    return;
+  }
+  if (newPassword !== confirmPassword) {
+    settingsAccessShowError("Passwords don’t match.");
+    $("#settings-access-confirm").focus();
+    return;
+  }
+  const button = $("#settings-access-set") as HTMLButtonElement;
+  button.disabled = true;
+  settingsAccessShowError("");
+  try {
+    await setAccessPassword(newPassword);
+    (["#settings-access-new", "#settings-access-confirm"] as const).forEach(
+      (id) => (($(id) as HTMLInputElement).value = ""),
+    );
+    await refreshSettingsAccessState();
+    showToast("Password updated", "success");
+  } catch (error) {
+    showToast((error as Error).message);
+  } finally {
+    button.disabled = false;
+  }
+});
+// Two-step Remove: click the link, reveal Confirm, click that. No
+// window.confirm() — the session cookie that is about to be cleared is
+// itself the authorization for the action.
+$("#settings-access-remove").addEventListener("click", () => {
+  $("#settings-access-remove").hidden = true;
+  $("#settings-access-confirm-remove").hidden = false;
+  ($("#settings-access-confirm-remove") as HTMLElement).focus();
+});
+$("#settings-access-confirm-remove").addEventListener("click", async () => {
+  try {
+    await clearAccessPassword();
+    await refreshSettingsAccessState();
+    showToast("Password removed", "success");
+  } catch (error) {
+    showToast((error as Error).message);
+  }
+});
 $("#swatches").innerHTML = Object.entries(COLORS)
   .map(
     ([name, theme]) =>
@@ -3130,4 +3537,17 @@ window.addEventListener("pagehide", () => {
     new Blob([statePayload()], { type: "application/json" }),
   );
 });
-void boot();
+void (async () => {
+  try {
+    await bootstrapAccessAuth();
+  } catch (err) {
+    // Access status could not even be checked (server unreachable, or a
+    // malformed response) — the normal UI must not start fetching
+    // protected data in that state either.
+    document.body.innerHTML = `<div class="access-auth-overlay"><div class="access-auth-dialog"><h1>Unable to open Eta</h1><p>${
+      err instanceof Error ? err.message : "Access protection could not start"
+    }</p></div></div>`;
+    return;
+  }
+  void boot();
+})();

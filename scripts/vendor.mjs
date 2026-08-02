@@ -34,6 +34,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
+import { build } from "esbuild";
 
 const OUT = "web/vendor";
 const NM = "node_modules";
@@ -130,9 +131,29 @@ const GENERATED = [
   "marked.min.js",
   "purify.min.js",
   "highlight-github-dark.min.css",
+  "noble-hashes",
 ];
 
-function main() {
+// --- noble-hashes: bundled, not copied ----------------------------------
+// Every other dependency here ships a prebuilt global/UMD file that a
+// plain <script> tag can load, matching Eta's client bundle (tsconfig
+// module:"None", one non-module output file). @noble/hashes ships ESM
+// only, so this is the one dependency that needs an actual bundle rather
+// than a copy — esbuild folds its handful of relative-import source files
+// into one IIFE that assigns window.NobleHashes, run once here at vendor
+// time and committed like every other file in this directory.
+async function bundleNobleHashes() {
+  await build({
+    entryPoints: ["scripts/noble-hashes-entry.js"],
+    bundle: true,
+    minify: true,
+    format: "iife",
+    globalName: "NobleHashes",
+    outfile: join(OUT, "noble-hashes/noble-hashes.bundle.js"),
+  });
+}
+
+async function main() {
   for (const entry of GENERATED) {
     rmSync(join(OUT, entry), { recursive: true, force: true });
   }
@@ -223,8 +244,10 @@ function main() {
   }
   writeFileSync(join(OUT, "fonts/fonts.css"), fontCss);
 
+  await bundleNobleHashes();
+
   console.log(`vendored shoelace components: ${SL_COMPONENTS.join(", ")}`);
   console.log(`vendored icons: ${used.length}`);
 }
 
-main();
+await main();

@@ -46,6 +46,7 @@
     <script src="vendor/winbox/winbox.bundle.min.js"></script>
     <script src="vendor/xterm/xterm.js"></script>
     <script src="vendor/xterm/addon-fit.js"></script>
+    <script src="vendor/noble-hashes/noble-hashes.bundle.js"></script>
   </head>
   <body class="sl-theme-dark">
     <main class="app-shell">
@@ -77,6 +78,9 @@
             title="Change identity color"
           >
             <i data-lucide="palette"></i>
+          </button>
+          <button class="icon-button" id="settings-button" title="Settings">
+            <i data-lucide="settings"></i>
           </button>
         </div>
       </header>
@@ -252,6 +256,66 @@
       class="theme-dialog"
       ><div class="swatches" id="swatches"></div
     ></sl-dialog>
+    <sl-dialog id="settings-dialog" label="Settings" class="settings-dialog">
+      <div class="settings-group-label">Security</div>
+      <div class="settings-access-header">
+        <span class="settings-access-title">Access password</span>
+        <span id="settings-access-dot" class="settings-access-dot"></span>
+        <span id="settings-access-state" class="settings-access-state"
+          >Disabled</span
+        >
+      </div>
+      <p class="settings-access-note">
+        Off by default: anyone on this network reaching this address opens Eta
+        with no login, same as before. Setting a password requires it in this
+        browser and for any other PC that browses through this one.
+      </p>
+      <input
+        type="password"
+        id="settings-access-new"
+        class="settings-access-input"
+        autocomplete="new-password"
+        placeholder="New password"
+      />
+      <input
+        type="password"
+        id="settings-access-confirm"
+        class="settings-access-input"
+        autocomplete="new-password"
+        placeholder="Confirm new password"
+      />
+      <div class="settings-access-hint-row">
+        <span class="settings-access-hint">8+ characters.</span>
+        <span
+          id="settings-access-error"
+          class="settings-access-error"
+          role="alert"
+        ></span>
+      </div>
+      <div class="settings-access-actions">
+        <button
+          type="button"
+          id="settings-access-remove"
+          class="settings-access-remove-link"
+          hidden
+        >
+          · Remove password
+        </button>
+        <sl-button
+          id="settings-access-confirm-remove"
+          variant="danger"
+          size="small"
+          hidden
+          >Confirm remove</sl-button
+        >
+        <sl-button id="settings-access-set" variant="primary" size="small"
+          >Set password</sl-button
+        >
+      </div>
+      <div slot="footer">
+        <sl-button id="settings-close">Close</sl-button>
+      </div>
+    </sl-dialog>
     <sl-alert id="error-toast" variant="danger" duration="5000" closable
       ><i slot="icon" data-lucide="circle-alert"></i
       ><span id="error-message"></span
