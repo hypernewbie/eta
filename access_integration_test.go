@@ -478,3 +478,49 @@ func TestProxiedCallReauthenticatesAfterPeerSessionIsLost(t *testing.T) {
 		t.Fatalf("proxied call after the peer's sessions were dropped: got %d, want automatic relogin to recover it", code)
 	}
 }
+
+// TestUnreachablePeerReportsAFriendlyMessage guards the exact bug
+// reported: a peer being offline surfaced Go's own transport error —
+// "dial tcp 100.92.136.40:7080: connect: connection refused", the
+// literal internal request URL included — straight to the browser, and
+// (client-side, not exercised by this test) flipped this server's own
+// "OFFLINE" header badge for a problem that was never this server's.
+func TestUnreachablePeerReportsAFriendlyMessage(t *testing.T) {
+	// A server that is immediately closed leaves its address refusing
+	// connections, which is what "peer is off" actually looks like at
+	// the transport level — more faithful than a route that 404s.
+	deadServer := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	deadURL := deadServer.URL
+	deadServer.Close()
+
+	coordinator, err := newServer([]string{t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	coordinator.peers = peers.New(filepath.Join(t.TempDir(), "peers.json"))
+	if err := coordinator.peers.Add(peers.Peer{URL: deadURL, Name: "MINERVA"}); err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/remote/roots?peer="+deadURL, nil)
+	w := httptest.NewRecorder()
+	coordinator.routes().ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadGateway {
+		t.Fatalf("status = %d, want %d", w.Code, http.StatusBadGateway)
+	}
+	var body struct {
+		Error string `json:"error"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("response was not JSON: %s", w.Body.String())
+	}
+	if body.Error != "MINERVA is offline or unreachable" {
+		t.Fatalf("got %q, want the friendly message", body.Error)
+	}
+	for _, leak := range []string{"dial tcp", "connect:", deadURL} {
+		if strings.Contains(w.Body.String(), leak) {
+			t.Fatalf("response leaked a raw transport detail (%q): %s", leak, w.Body.String())
+		}
+	}
+}

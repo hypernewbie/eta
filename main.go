@@ -747,7 +747,7 @@ func (s *server) proxyRemoteTerminal(w http.ResponseWriter, r *http.Request, rou
 	}
 	response, err := s.peerClient(peer, 10*time.Second).Do(request)
 	if err != nil {
-		writeError(w, err)
+		writeError(w, friendlyPeerError(peer, err))
 		return
 	}
 	defer response.Body.Close()
@@ -794,7 +794,7 @@ func (s *server) streamRemoteTerminal(w http.ResponseWriter, r *http.Request, ro
 	request.Header.Set("Accept", "text/event-stream")
 	response, err := s.peerClient(peer, 0).Do(request)
 	if err != nil {
-		writeError(w, err)
+		writeError(w, friendlyPeerError(peer, err))
 		return
 	}
 	defer response.Body.Close()
@@ -1126,7 +1126,7 @@ func (s *server) handleRemoteDelete(w http.ResponseWriter, r *http.Request) {
 	request.Header.Set("Content-Type", "application/json")
 	response, err := s.peerClient(peer, 10*time.Second).Do(request)
 	if err != nil {
-		writeError(w, err)
+		writeError(w, friendlyPeerError(peer, err))
 		return
 	}
 	defer response.Body.Close()
@@ -1156,7 +1156,7 @@ func (s *server) handleRemoteTransferJob(w http.ResponseWriter, r *http.Request)
 	}
 	response, err := s.peerClient(peer, 10*time.Second).Get(strings.TrimSuffix(peer.URL, "/") + "/api/transfer-jobs/" + url.PathEscape(id))
 	if err != nil {
-		writeError(w, err)
+		writeError(w, friendlyPeerError(peer, err))
 		return
 	}
 	defer response.Body.Close()
@@ -1525,7 +1525,7 @@ func (s *server) proxyPeer(w http.ResponseWriter, r *http.Request, route string)
 	}
 	response, err := s.peerClient(peer, 10*time.Second).Do(request)
 	if err != nil {
-		writeError(w, err)
+		writeError(w, friendlyPeerError(peer, err))
 		return
 	}
 	defer response.Body.Close()
@@ -1567,7 +1567,22 @@ func (s *server) proxyCachedPeerRange(w http.ResponseWriter, r *http.Request, pe
 	source := &remotefile.HTTPSource{BaseURL: peer.URL, Root: rootID, Client: s.peerClient(peer, 30*time.Second)}
 	body, info, err := remotefile.ReadHotCachedRange(r.Context(), s.hotRanges, s.remoteCache, source, r.URL.Query().Get("path"), start, end-start+1)
 	if err != nil {
-		writeError(w, err)
+		// A cache miss or corrupt range read comes back from this same
+		// call as a non-network error (a decode failure, a size
+		// mismatch); friendlyPeerError's "is offline" wording would be
+		// wrong for those. But this function exists to shortcut *around*
+		// proxyPeer for one case — an explicit byte range on /api/file —
+		// and every other path through it already gets the friendly
+		// wrapping, so a raw network error surfacing here only from this
+		// one shortcut would be an inconsistent, confusing exception.
+		// net.Error covers exactly the transport-level failures (refused,
+		// timeout, DNS) that are actually the offline case.
+		var netErr net.Error
+		if errors.As(err, &netErr) {
+			writeError(w, friendlyPeerError(peer, err))
+		} else {
+			writeError(w, err)
+		}
 		return true
 	}
 	if len(body) == 0 && info.Size > 0 {

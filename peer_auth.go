@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"strings"
 	"sync"
@@ -17,6 +18,24 @@ import (
 	"github.com/hypernewbie/eta/internal/access"
 	"github.com/hypernewbie/eta/internal/peers"
 )
+
+// friendlyPeerError turns a transport-level failure to reach a peer
+// (connection refused, DNS failure, timeout) into a message meant to be
+// read — not Go's own error text, which names the exact internal request
+// URL and the raw dial error ("dial tcp 100.92.136.40:7080: connect:
+// connection refused"). http.Client.Do/Get/Post only ever errors this
+// way; an HTTP status the peer itself returned, even a 5xx, arrives as a
+// normal response, not an error — so every err != nil right after one of
+// those calls against a peer is exactly this case, never anything else.
+// The original error is still logged server-side, just not shown.
+func friendlyPeerError(peer peers.Peer, err error) error {
+	log.Printf("peer %s unreachable: %v", peer.URL, err)
+	name := peer.Name
+	if name == "" {
+		name = peer.URL
+	}
+	return newAPIError(http.StatusBadGateway, name+" is offline or unreachable")
+}
 
 // A peer that has set its own access password is, from this server's
 // point of view, just another login: someone here typed that peer's
