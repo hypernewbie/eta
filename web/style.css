@@ -195,6 +195,9 @@ button {
 .divider {
   color: var(--text-dim);
 }
+.icon-button[hidden] {
+  display: none;
+}
 .icon-button {
   display: grid;
   place-items: center;
@@ -269,6 +272,9 @@ button {
   width: 13px;
   color: var(--text-muted);
 }
+.breadcrumbs[hidden] {
+  display: none;
+}
 .breadcrumbs {
   min-width: 0;
   display: flex;
@@ -305,6 +311,55 @@ button {
   margin-left: auto;
   display: flex;
   gap: 3px;
+}
+.path-input {
+  flex: 1;
+  min-width: 0;
+  height: 30px;
+  padding: 0 10px;
+  border: 1px solid var(--bg-border);
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.25);
+  color: var(--text-primary);
+  font: 12px var(--font-mono);
+}
+.path-input:focus {
+  outline: none;
+  border-color: color-mix(in srgb, var(--accent) 55%, transparent);
+}
+.toolbar-search {
+  flex: none;
+  width: 170px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 34px;
+  padding: 0 9px;
+  border: 1px solid var(--bg-border);
+  border-radius: 7px;
+  background: rgba(0, 0, 0, 0.15);
+  color: var(--text-muted);
+}
+.toolbar-search svg {
+  width: 13px;
+  flex: none;
+}
+.toolbar-search input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--text-primary);
+  font-size: 12px;
+}
+.toolbar-search .icon-button {
+  flex: none;
+  width: 20px;
+  height: 20px;
+}
+.toolbar-search .icon-button svg {
+  width: 12px;
 }
 .file-table {
   min-height: 355px;

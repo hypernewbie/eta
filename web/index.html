@@ -45,6 +45,7 @@
     <script src="vendor/xterm/xterm.js"></script>
     <script src="vendor/xterm/addon-fit.js"></script>
     <script src="vendor/noble-hashes/noble-hashes.bundle.js"></script>
+    <script src="vendor/fuse.bundle.js"></script>
   </head>
   <body class="sl-theme-dark">
     <main class="app-shell">
@@ -101,6 +102,38 @@
               data-explorer="breadcrumbs"
               aria-label="Breadcrumb"
             ></nav>
+            <input
+              type="text"
+              data-explorer="path-input"
+              class="path-input"
+              aria-label="Go to path"
+              hidden
+            />
+            <button
+              class="icon-button"
+              data-explorer="path-edit-button"
+              title="Go to path"
+            >
+              <i data-lucide="text-cursor-input"></i>
+            </button>
+            <div class="toolbar-search">
+              <i data-lucide="search"></i>
+              <input
+                type="text"
+                data-explorer="search-input"
+                placeholder="Filter files…"
+                aria-label="Filter files in this folder"
+              />
+              <button
+                type="button"
+                class="icon-button"
+                data-explorer="search-clear"
+                title="Clear filter"
+                hidden
+              >
+                <i data-lucide="x"></i>
+              </button>
+            </div>
             <div class="toolbar-actions">
               <button
                 class="icon-button"

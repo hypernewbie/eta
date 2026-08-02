@@ -75,7 +75,9 @@ function shoelaceClosure() {
 function iconCollection() {
   const app = readFileSync("web/app.ts", "utf8");
   const used = [
-    ...new Set([...app.matchAll(/vscode-icons:([a-z0-9-]+)/g)].map((m) => m[1])),
+    ...new Set(
+      [...app.matchAll(/vscode-icons:([a-z0-9-]+)/g)].map((m) => m[1]),
+    ),
   ].sort();
   const full = JSON.parse(
     readFileSync(`${NM}/@iconify-json/vscode-icons/icons.json`, "utf8"),
@@ -128,6 +130,7 @@ const GENERATED = [
   "marked.min.js",
   "purify.min.js",
   "noble-hashes",
+  "fuse.bundle.js",
 ];
 
 // --- noble-hashes: bundled, not copied ----------------------------------
@@ -146,6 +149,20 @@ async function bundleNobleHashes() {
     format: "iife",
     globalName: "NobleHashes",
     outfile: join(OUT, "noble-hashes/noble-hashes.bundle.js"),
+  });
+}
+
+// Fuse.js: same story as noble-hashes — ESM/CJS only, no plain global
+// build since v7 dropped it, so it is bundled rather than copied. Used
+// for the Explorer search bar (fuzzy filename matching) rather than a
+// hand-rolled substring search.
+async function bundleFuse() {
+  await build({
+    entryPoints: ["scripts/fuse-entry.js"],
+    bundle: true,
+    minify: true,
+    format: "iife",
+    outfile: join(OUT, "fuse.bundle.js"),
   });
 }
 
@@ -169,7 +186,6 @@ async function main() {
 
   copy(`${NM}/lucide/dist/umd/lucide.min.js`, "lucide/lucide.min.js");
   copy(`${NM}/dayjs/dayjs.min.js`, "dayjs/dayjs.min.js");
-
 
   // Prism: core, the two plugins Eta loads, and every grammar so the
   // autoloader can resolve any language offline.
@@ -237,6 +253,7 @@ async function main() {
   writeFileSync(join(OUT, "fonts/fonts.css"), fontCss);
 
   await bundleNobleHashes();
+  await bundleFuse();
 
   console.log(`vendored shoelace components: ${SL_COMPONENTS.join(", ")}`);
   console.log(`vendored icons: ${used.length}`);

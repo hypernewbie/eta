@@ -11,6 +11,13 @@ interface Window {
   WinBox?: new (options: WinBoxOptions) => WinBoxInstance;
   Terminal?: new (options: Record<string, unknown>) => XTermInstance;
   FitAddon?: { FitAddon: new () => XTermFitAddon };
+  // Fuse.js: fuzzy filename matching for the Explorer's search bar,
+  // vendored (bundled, since v7 dropped its global build) rather than
+  // hand-rolled.
+  Fuse?: new (
+    list: unknown[],
+    options: { keys: string[]; threshold?: number },
+  ) => { search: (term: string) => { item: any }[] };
   NobleHashes?: {
     pbkdf2Async: (
       hash: unknown,
@@ -112,6 +119,12 @@ type AppState = {
   peer: Peer | null;
   tabs: ExplorerTab[];
   activeTab: number;
+  // The filter bar's current text, and the last full listing fetched
+  // for this folder — kept so retyping the filter re-filters what is
+  // already on screen instead of re-fetching the directory on every
+  // keystroke.
+  search: string;
+  lastEntries: Entry[];
 };
 type ExplorerTab = {
   root: number;
@@ -370,6 +383,8 @@ function createExplorerView(key: string, panel: HTMLElement): ExplorerView {
       peer: null,
       tabs: [{ root: 0, path: "", peer: null }],
       activeTab: 0,
+      search: "",
+      lastEntries: [],
     },
     element: (name: string) => {
       const element = panel.querySelector(`[data-explorer="${name}"]`);
@@ -1169,11 +1184,29 @@ function updateSelectionInfo(view: ExplorerView) {
     ? `${entry.name} — ${entry.kind === "directory" ? "folder" : bytes(entry.size)}`
     : "";
 }
+// Fuzzy-filters the current folder's own listing by name; not a
+// recursive search across subfolders, and not a server round trip —
+// allEntries is whatever was last fetched for this folder, reused on
+// every keystroke.
+function filteredEntries(view: ExplorerView, allEntries: Entry[]): Entry[] {
+  const visible = visibleEntries(allEntries);
+  const term = view.state.search.trim();
+  if (!term) return visible;
+  if (!window.Fuse) return visible; // library failed to load; fail open, not broken
+  return new window.Fuse(visible, { keys: ["name"], threshold: 0.35 })
+    .search(term)
+    .map((result) => result.item as Entry);
+}
 function renderEntries(view: ExplorerView, allEntries: Entry[]) {
-  const entries = visibleEntries(allEntries);
+  view.state.lastEntries = allEntries;
+  const entries = filteredEntries(view, allEntries);
   // Rows are rebuilt here, so any previous highlight is gone with them.
   view.state.selected = null;
-  renderStatusBar(view, entries, allEntries.length - entries.length);
+  // The hidden count is dotfile suppression only; a search term hiding
+  // most of the folder is not "hidden files" and must not be reported
+  // as if it were.
+  const hiddenCount = allEntries.length - visibleEntries(allEntries).length;
+  renderStatusBar(view, entries, hiddenCount);
   const container = view.element("entries");
   view
     .element("file-table")
@@ -1278,6 +1311,15 @@ function reorderTabs(view: ExplorerView, from: number, to: number) {
 
 async function navigate(view: ExplorerView, path = "") {
   view.state.path = path;
+  // A filter is about the folder being left, not a standing preference
+  // — carrying it into a different folder that happens to look empty
+  // under the same term is a worse surprise than just clearing it.
+  if (view.state.search) {
+    view.state.search = "";
+    const searchInput = view.element("search-input") as HTMLInputElement;
+    searchInput.value = "";
+    (view.element("search-clear") as HTMLElement).hidden = true;
+  }
   // Mirror the new path onto the active tab so opening tabs in this
   // explorer don't drift from what's actually displayed.
   const tab = view.state.tabs[view.state.activeTab];
@@ -1302,8 +1344,16 @@ async function navigate(view: ExplorerView, path = "") {
     renderEntries(view, result.entries || []);
   } catch (error) {
     showToast(error.message);
-    renderEntries(view, []);
+    // "This folder is empty" is what renderEntries([]) would have said
+    // — wrong for every failure here, from a permission error to (most
+    // often, for a peer window) that PC going offline mid-session.
+    showEntriesError(view, error.message);
   }
+}
+function showEntriesError(view: ExplorerView, message: string) {
+  view.element("entries").innerHTML =
+    `<div class="empty"><div><i data-lucide="${view.state.peer ? "wifi-off" : "circle-alert"}"></i>${escapeHTML(message)}</div></div>`;
+  iconify();
 }
 
 async function loadText(view: ExplorerView, entry: Entry) {
@@ -1811,6 +1861,64 @@ async function copyText() {
   }
 }
 
+// A pasted Windows-style path or stray leading/trailing slash should
+// still navigate; the server's own containment check (internal to
+// s.target) is the actual security boundary, this is only about typing
+// something that reads naturally and having it work.
+function normalizeTypedPath(path: string): string {
+  return path.replace(/\\/g, "/").replace(/^\/+/, "").replace(/\/+$/, "");
+}
+function bindPathEditor(view: ExplorerView) {
+  const button = view.element("path-edit-button");
+  const input = view.element("path-input") as HTMLInputElement;
+  const breadcrumbs = view.element("breadcrumbs");
+  const open = () => {
+    input.value = view.state.path;
+    breadcrumbs.hidden = true;
+    button.hidden = true;
+    input.hidden = false;
+    input.focus();
+    input.select();
+  };
+  const close = () => {
+    input.hidden = true;
+    breadcrumbs.hidden = false;
+    button.hidden = false;
+  };
+  button.addEventListener("click", open);
+  input.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      const target = normalizeTypedPath(input.value);
+      close();
+      // navigate() already opens a file directly if the typed path
+      // resolves to one, rather than an entry list of one — the same
+      // function a breadcrumb click uses, so this works identically
+      // for a peer's filesystem as for the local one.
+      void navigate(view, target);
+    } else if (event.key === "Escape") {
+      event.preventDefault();
+      close();
+    }
+  });
+  input.addEventListener("blur", close);
+}
+function bindSearch(view: ExplorerView) {
+  const input = view.element("search-input") as HTMLInputElement;
+  const clear = view.element("search-clear") as HTMLButtonElement;
+  input.addEventListener("input", () => {
+    view.state.search = input.value;
+    clear.hidden = !input.value;
+    renderEntries(view, view.state.lastEntries);
+  });
+  clear.addEventListener("click", () => {
+    input.value = "";
+    view.state.search = "";
+    clear.hidden = true;
+    renderEntries(view, view.state.lastEntries);
+    input.focus();
+  });
+}
 function bindExplorer(view: ExplorerView) {
   view.element("root-select").addEventListener("change", (event) => {
     view.state.root = Number((event.target as HTMLSelectElement).value);
@@ -1892,6 +2000,8 @@ function bindExplorer(view: ExplorerView) {
     ) as HTMLElement | null;
     if (button) navigate(view, button.dataset.path);
   });
+  bindPathEditor(view);
+  bindSearch(view);
   view.element("entries").addEventListener("dragstart", (event) => {
     const row = (event.target as HTMLElement).closest(
       ".entry",
@@ -2141,7 +2251,16 @@ async function initializeExplorer(
     }
     await navigate(view, restored?.path || "");
   } catch (error) {
-    setServerOffline(true);
+    if (view.state.peer) {
+      // A peer being unreachable says nothing about *this* server's own
+      // health — the header's OFFLINE badge means this instance, and
+      // lighting it up because someone else's PC is off was exactly
+      // backwards. The window says so instead, where it is actually
+      // about.
+      showEntriesError(view, (error as Error).message);
+    } else {
+      setServerOffline(true);
+    }
     showToast((error as Error).message);
   }
 }
@@ -3677,9 +3796,29 @@ async function afterPeerAdded(peer: Peer) {
   refreshTaskStrip();
   showToast(`Added ${peer.name}`, "success");
 }
+// A bare hostname is the common case ("minerva", not
+// "http://minerva:7080") — Eta always listens on 7080 by default, so
+// requiring the scheme and port back is friction for the normal case.
+// An explicit scheme is respected as-is (no port forced onto it): that
+// is someone who already knows they need https on 443 behind a reverse
+// proxy, for example, and forcing 7080 onto that would break it.
+function normalizePeerURL(raw: string): string {
+  const trimmed = raw.trim();
+  if (!trimmed) return trimmed;
+  const hadScheme = /^[a-z][a-z0-9+.-]*:\/\//i.test(trimmed);
+  const withScheme = hadScheme ? trimmed : `http://${trimmed}`;
+  try {
+    const parsed = new URL(withScheme);
+    if (!hadScheme && !parsed.port) parsed.port = "7080";
+    return parsed.toString().replace(/\/$/, "");
+  } catch {
+    return trimmed; // let the server's own validation report the real problem
+  }
+}
 $("#add-peer-button").addEventListener("click", async () => {
-  const url = window.prompt("Eta peer URL (for example http://pc-b:7080):");
-  if (!url) return;
+  const typed = window.prompt("Eta PC (hostname, or a full URL):");
+  if (!typed) return;
+  const url = normalizePeerURL(typed);
   try {
     await afterPeerAdded(await addPeer(url));
     return;
