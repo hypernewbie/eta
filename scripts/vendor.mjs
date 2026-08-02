@@ -114,10 +114,7 @@ const FONTS = [
 ];
 
 // Everything this script generates. Cleaned before each run so a removed
-// dependency cannot linger. web/vendor/highlight.min.js is deliberately
-// absent: highlight.js@11.9.0 ships no browser bundle on npm (the package
-// is CommonJS/ESM for bundlers), so that one file stays a committed
-// prebuilt artifact rather than something this script can regenerate.
+// dependency cannot linger.
 const GENERATED = [
   "shoelace",
   "winbox",
@@ -130,7 +127,6 @@ const GENERATED = [
   "fonts",
   "marked.min.js",
   "purify.min.js",
-  "highlight-github-dark.min.css",
   "noble-hashes",
 ];
 
@@ -201,10 +197,6 @@ async function main() {
 
   copy(`${NM}/marked/lib/marked.umd.js`, "marked.min.js");
   copy(`${NM}/dompurify/dist/purify.min.js`, "purify.min.js");
-  copy(
-    `${NM}/highlight.js/styles/github-dark.min.css`,
-    "highlight-github-dark.min.css",
-  );
 
   const { used, collection } = iconCollection();
   // A plain lookup table, not an icon framework: web/app.ts renders these

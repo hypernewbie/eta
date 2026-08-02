@@ -7,7 +7,6 @@ interface Window {
   dayjs?: any;
   marked?: any;
   DOMPurify?: any;
-  hljs?: any;
   Prism?: any;
   WinBox?: new (options: WinBoxOptions) => WinBoxInstance;
   Terminal?: new (options: Record<string, unknown>) => XTermInstance;
@@ -1353,11 +1352,17 @@ async function renderPreview(
     // Media inherits the tray's setting, so opening a video does not
     // ignore a volume the user already chose.
     applyMediaVolume(container);
+    // Markdown fences and the standalone code viewer share one
+    // highlighter. They used to be two: fences went through
+    // highlight.js, which only carried ~35 statically bundled
+    // languages and had no path to any more — unlike Prism here, whose
+    // autoloader can pull any of its ~300 vendored grammars on demand.
+    // A fenced block tagged with anything outside that fixed 35 quietly
+    // rendered uncolored, which looked like highlighting was broken for
+    // no obvious reason depending on which language a document happened
+    // to use.
     container
-      .querySelectorAll(".markdown-preview pre code")
-      .forEach((block) => window.hljs?.highlightElement(block));
-    container
-      .querySelectorAll(".code-inspector code")
+      .querySelectorAll(".markdown-preview pre code, .code-inspector code")
       .forEach((block) => window.Prism?.highlightElement(block));
     iconify();
   } catch (error) {
@@ -3342,10 +3347,19 @@ $("#desktop-icons").addEventListener("contextmenu", (event) => {
   if (!icon || !model || (!model.removable && !model.peer)) return;
   event.preventDefault();
   desktopContextKey = model.id;
+  // Only the peer's own computer icon offers removing it entirely — a
+  // shortcut into that peer's filesystem offers fixing its password
+  // too (model.peer is set there as well), but removing "the PC" from
+  // a shortcut's menu would take the shortcut's target down with it in
+  // a way that is not obvious from where you clicked.
+  const isComputerIcon = model.id.startsWith("computer:");
   $("#desktop-context-menu [data-desktop-action='unpin']").hidden =
     !model.removable;
   $("#desktop-context-menu [data-desktop-action='peer-password']").hidden =
     !model.peer;
+  $("#desktop-context-menu [data-desktop-action='remove-peer']").hidden = !(
+    isComputerIcon && model.peer
+  );
   const menu = $("#desktop-context-menu");
   menu.style.left = `${event.clientX}px`;
   menu.style.top = `${event.clientY}px`;
@@ -3372,6 +3386,12 @@ $("#desktop-context-menu").addEventListener("click", async (event) => {
     }
     return;
   }
+  if (action.dataset.desktopAction === "remove-peer") {
+    const peer = desktopIconIndex.get(key)?.peer;
+    if (!peer) return;
+    await removePeer(peer);
+    return;
+  }
   desktopIconIndex.get(key)?.open();
 });
 $("#desktop-icons").addEventListener("keydown", (event) => {
@@ -3380,6 +3400,130 @@ $("#desktop-icons").addEventListener("keydown", (event) => {
   ) as HTMLElement | null;
   if (icon && event.key === "Enter") openDesktopIcon(icon);
 });
+// ── Copy / paste the PC list, like Phi's config export/import ────────────
+// Typing the same handful of URLs into every machine in a household is
+// the annoying part of a multi-PC setup; copy them once from one
+// instance, paste into the others.
+const PEER_LIST_PREFIX = "ETAPEERS1:";
+async function writeClipboardText(text: string): Promise<boolean> {
+  if (navigator.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return true;
+    } catch {
+      // Falls through to the execCommand fallback: some browsers gate
+      // the async clipboard API behind a permission prompt that can be
+      // denied outright rather than asked.
+    }
+  }
+  const textarea = document.createElement("textarea");
+  textarea.value = text;
+  textarea.style.position = "fixed";
+  textarea.style.opacity = "0";
+  document.body.appendChild(textarea);
+  textarea.focus();
+  textarea.select();
+  try {
+    return document.execCommand("copy");
+  } finally {
+    document.body.removeChild(textarea);
+  }
+}
+async function readClipboardText(): Promise<string> {
+  if (navigator.clipboard?.readText) {
+    try {
+      return await navigator.clipboard.readText();
+    } catch {
+      // Permission denied, or a browser that never implemented it —
+      // ask directly rather than fail silently.
+    }
+  }
+  return window.prompt("Paste the PC list here:") || "";
+}
+async function copyPeerList() {
+  // Only the URL travels. Name/accent/glyph are re-probed on add, and a
+  // peer's Verifier must never leave this machine: it is a bearer
+  // credential for that peer's password, and pasting it into another
+  // instance would let that instance act as this one against that peer
+  // without ever knowing the password itself.
+  const urls = enrolledPeers.map((peer) => peer.url);
+  if (urls.length === 0) {
+    showToast("No PCs to copy yet");
+    return;
+  }
+  const ok = await writeClipboardText(PEER_LIST_PREFIX + JSON.stringify(urls));
+  showToast(
+    ok
+      ? `Copied ${urls.length} PC${urls.length === 1 ? "" : "s"}`
+      : "Could not copy to the clipboard",
+    ok ? "success" : "danger",
+  );
+}
+async function pastePeerList() {
+  const text = (await readClipboardText()).trim();
+  if (!text) return;
+  if (!text.startsWith(PEER_LIST_PREFIX)) {
+    showToast("Clipboard does not hold a copied PC list");
+    return;
+  }
+  let urls: unknown;
+  try {
+    urls = JSON.parse(text.slice(PEER_LIST_PREFIX.length));
+  } catch {
+    urls = null;
+  }
+  if (!Array.isArray(urls) || !urls.every((url) => typeof url === "string")) {
+    showToast("Copied PC list is corrupted");
+    return;
+  }
+  const known = new Set(enrolledPeers.map((peer) => peer.url));
+  const targets = (urls as string[]).filter((url) => url && !known.has(url));
+  if (targets.length === 0) {
+    showToast("Every PC in that list is already added");
+    return;
+  }
+  let added = 0;
+  let failed = 0;
+  for (const url of targets) {
+    try {
+      const peer = await addPeer(url).catch(async (error) => {
+        if (
+          !(error as { peerPasswordRequired?: boolean }).peerPasswordRequired
+        ) {
+          throw error;
+        }
+        const password = window.prompt(`${url} requires its access password:`);
+        if (!password) throw error;
+        return addPeer(url, password);
+      });
+      enrolledPeers = [...enrolledPeers, peer];
+      added++;
+    } catch {
+      failed++;
+    }
+  }
+  try {
+    enrolledPeers = await api("/api/peers");
+  } catch {
+    // Keep the locally accumulated list built by the loop above.
+  }
+  refreshTaskStrip();
+  const parts: string[] = [];
+  if (added) parts.push(`added ${added}`);
+  if (failed) parts.push(`${failed} failed`);
+  const skipped = (urls as string[]).length - targets.length;
+  if (skipped) parts.push(`${skipped} already added`);
+  showToast(
+    parts.length ? `Pasted PC list: ${parts.join(", ")}` : "Nothing to add",
+    failed && !added ? "danger" : "success",
+  );
+}
+$("#eta-menu-copy-peers").addEventListener("click", () => void copyPeerList());
+$("#eta-menu-paste-peers").addEventListener(
+  "click",
+  () => void pastePeerList(),
+);
+
 $("#eta-launcher").addEventListener("click", (event) => {
   event.stopPropagation();
   const menu = $("#eta-menu");
@@ -3441,6 +3585,37 @@ async function addPeer(url: string, password?: string) {
     throw failure;
   }
   return body;
+}
+async function removePeer(peer: Peer) {
+  try {
+    const response = await fetch(
+      `/api/peers?url=${encodeURIComponent(peer.url)}`,
+      { method: "DELETE" },
+    );
+    if (!response.ok && response.status !== 204) {
+      const body = await response.json().catch(() => ({}));
+      throw new Error(body.error || `Request failed (${response.status})`);
+    }
+  } catch (error) {
+    showToast((error as Error).message);
+    return;
+  }
+  // The server dropped it immediately; enrolledPeers was only ever read
+  // at boot or after adding one, so without this a removed PC stayed on
+  // the desktop, in the dock, and in the computers menu until reload —
+  // the same staleness the add flow already had to fix.
+  try {
+    enrolledPeers = await api("/api/peers");
+  } catch {
+    enrolledPeers = enrolledPeers.filter((p) => p.url !== peer.url);
+  }
+  // A shortcut into this peer's filesystem is left alone rather than
+  // deleted — openShortcut already handles one pointing at a PC that is
+  // no longer added (a toast, not a crash), and silently discarding a
+  // shortcut the user pinned on purpose would be a worse surprise than
+  // that toast.
+  refreshTaskStrip();
+  showToast(`Removed ${peer.name}`, "success");
 }
 async function afterPeerAdded(peer: Peer) {
   // The server knew about the new PC immediately; nothing on screen

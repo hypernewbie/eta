@@ -764,24 +764,41 @@ svg.file-type-icon {
 .code-inspector .line-numbers-rows > span:before {
   color: var(--text-dim);
 }
+/* Shared with .markdown-preview: fenced code blocks in a rendered
+   markdown file are highlighted by the same Prism instance as the
+   standalone code viewer (see web/app.ts), not a second theme, so a
+   ```language block in a README is colored identically to opening that
+   language directly. */
 .code-inspector .token.comment,
 .code-inspector .token.prolog,
 .code-inspector .token.doctype,
-.code-inspector .token.cdata {
+.code-inspector .token.cdata,
+.markdown-preview .token.comment,
+.markdown-preview .token.prolog,
+.markdown-preview .token.doctype,
+.markdown-preview .token.cdata {
   color: #6f6a7e;
 }
-.code-inspector .token.punctuation {
+.code-inspector .token.punctuation,
+.markdown-preview .token.punctuation {
   color: #aaa4ba;
 }
 .code-inspector .token.property,
 .code-inspector .token.tag,
 .code-inspector .token.constant,
 .code-inspector .token.symbol,
-.code-inspector .token.deleted {
+.code-inspector .token.deleted,
+.markdown-preview .token.property,
+.markdown-preview .token.tag,
+.markdown-preview .token.constant,
+.markdown-preview .token.symbol,
+.markdown-preview .token.deleted {
   color: #f87171;
 }
 .code-inspector .token.boolean,
-.code-inspector .token.number {
+.code-inspector .token.number,
+.markdown-preview .token.boolean,
+.markdown-preview .token.number {
   color: #fbbf24;
 }
 .code-inspector .token.selector,
@@ -789,35 +806,57 @@ svg.file-type-icon {
 .code-inspector .token.string,
 .code-inspector .token.char,
 .code-inspector .token.builtin,
-.code-inspector .token.inserted {
+.code-inspector .token.inserted,
+.markdown-preview .token.selector,
+.markdown-preview .token.attr-name,
+.markdown-preview .token.string,
+.markdown-preview .token.char,
+.markdown-preview .token.builtin,
+.markdown-preview .token.inserted {
   color: #34d399;
 }
 .code-inspector .token.operator,
 .code-inspector .token.entity,
 .code-inspector .token.url,
 .code-inspector .language-css .token.string,
-.code-inspector .style .token.string {
+.code-inspector .style .token.string,
+.markdown-preview .token.operator,
+.markdown-preview .token.entity,
+.markdown-preview .token.url,
+.markdown-preview .language-css .token.string,
+.markdown-preview .style .token.string {
   color: #67e8f9;
 }
 .code-inspector .token.atrule,
 .code-inspector .token.attr-value,
-.code-inspector .token.keyword {
+.code-inspector .token.keyword,
+.markdown-preview .token.atrule,
+.markdown-preview .token.attr-value,
+.markdown-preview .token.keyword {
   color: var(--accent-bright);
 }
 .code-inspector .token.function,
-.code-inspector .token.class-name {
+.code-inspector .token.class-name,
+.markdown-preview .token.function,
+.markdown-preview .token.class-name {
   color: #7dd3fc;
 }
 .code-inspector .token.regex,
 .code-inspector .token.important,
-.code-inspector .token.variable {
+.code-inspector .token.variable,
+.markdown-preview .token.regex,
+.markdown-preview .token.important,
+.markdown-preview .token.variable {
   color: #fdba74;
 }
 .code-inspector .token.important,
-.code-inspector .token.bold {
+.code-inspector .token.bold,
+.markdown-preview .token.important,
+.markdown-preview .token.bold {
   font-weight: 600;
 }
-.code-inspector .token.italic {
+.code-inspector .token.italic,
+.markdown-preview .token.italic {
   font-style: italic;
 }
 .preview-image {
@@ -1519,8 +1558,6 @@ sl-button[hidden] {
   font-family: var(--font-mono);
   line-height: 1;
   letter-spacing: 0.12em;
-  text-shadow: 0 0 12px
-    color-mix(in srgb, var(--identity-accent) 45%, transparent);
 }
 .eta-location {
   display: flex;
@@ -1549,18 +1586,51 @@ sl-button[hidden] {
   box-shadow: inset 2px 0 0 var(--pc-accent, var(--text-primary));
   outline: 0;
 }
-/* The glyph is the machine's identity, so let it glow with the accent
-   it is coloured by. */
-.eta-location-glyph {
-  text-shadow: 0 0 10px
-    color-mix(in srgb, var(--pc-accent, transparent) 70%, transparent);
-}
+/* The glyph carries the machine's colour, which is information, so it
+   keeps a hint of glow — but at a tint's strength. At the original
+   10px/70% it was a light source, and with several PCs listed the menu
+   read as a light show rather than a list. This used to be two
+   separate .eta-location-glyph blocks (a leftover from an earlier pass
+   whose replacement text silently failed to match anything in this
+   file, so the dial-back it described never actually applied); merged
+   into one here. */
 .eta-location-glyph {
   width: 21px;
+  text-shadow: 0 0 6px
+    color-mix(in srgb, var(--pc-accent, transparent) 35%, transparent);
   color: var(--pc-accent, var(--text-primary));
   font-size: 20px;
   line-height: 1;
   text-align: center;
+}
+.eta-menu-footer {
+  display: flex;
+  border-top: 1px solid var(--bg-border);
+}
+.eta-menu-footer button {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 9px 8px;
+  border: 0;
+  background: transparent;
+  color: var(--text-dim);
+  font: 10px var(--font-mono);
+  letter-spacing: 0.04em;
+  cursor: pointer;
+}
+.eta-menu-footer button:not(:last-child) {
+  border-right: 1px solid var(--bg-border);
+}
+.eta-menu-footer button svg {
+  width: 13px;
+  height: 13px;
+}
+.eta-menu-footer button:hover {
+  color: var(--identity-accent);
+  background: color-mix(in srgb, var(--identity-accent) 8%, transparent);
 }
 .task-strip {
   display: flex;
@@ -2285,6 +2355,16 @@ body.windowed {
   flex: 1;
   border: 0;
   border-radius: 0;
+}
+/* Code intentionally fills the window edge-to-edge (see the comment on
+   .inspector-content > .code-inspector above) — but that rule only ever
+   gave padding back to code's own .preview-text. Markdown never had any
+   padding of its own to begin with; the old sl-dialog viewer's spacing
+   came entirely from the dialog's ::part(body), which does not exist
+   here, so prose sat flush against the window frame. */
+.inspector-content > .markdown-preview {
+  padding: 22px 30px;
+  overflow: auto;
 }
 .inspector-actions {
   display: flex;

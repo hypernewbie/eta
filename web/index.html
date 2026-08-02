@@ -14,7 +14,6 @@
          a third party. Refresh web/vendor/ with `npm run vendor`. -->
     <link rel="stylesheet" href="vendor/fonts/fonts.css" />
     <link rel="stylesheet" href="vendor/shoelace/themes/dark.css" />
-    <link rel="stylesheet" href="vendor/highlight-github-dark.min.css" />
     <link rel="stylesheet" href="vendor/winbox/winbox.min.css" />
     <link rel="stylesheet" href="vendor/xterm/xterm.css" />
     <link
@@ -39,7 +38,6 @@
     <script src="vendor/dayjs/dayjs.min.js"></script>
     <script src="vendor/marked.min.js"></script>
     <script src="vendor/purify.min.js"></script>
-    <script src="vendor/highlight.min.js"></script>
     <script src="vendor/prism/prism.js"></script>
     <script src="vendor/prism/plugins/autoloader/prism-autoloader.min.js"></script>
     <script src="vendor/prism/plugins/line-numbers/prism-line-numbers.min.js"></script>
@@ -169,6 +167,9 @@
       <button type="button" data-desktop-action="unpin" class="danger">
         <i data-lucide="pin-off"></i> Remove from Desktop
       </button>
+      <button type="button" data-desktop-action="remove-peer" class="danger">
+        <i data-lucide="trash-2"></i> Remove PC
+      </button>
     </div>
     <nav id="taskbar" class="taskbar" aria-label="Desktop taskbar">
       <button
@@ -215,6 +216,14 @@
     <section id="eta-menu" class="eta-menu" aria-label="Computers" hidden>
       <div class="eta-menu-label">COMPUTERS</div>
       <div id="eta-menu-locations"></div>
+      <div class="eta-menu-footer">
+        <button type="button" id="eta-menu-copy-peers">
+          <i data-lucide="clipboard-copy"></i> Copy PC List
+        </button>
+        <button type="button" id="eta-menu-paste-peers">
+          <i data-lucide="clipboard-paste"></i> Paste PC List
+        </button>
+      </div>
     </section>
 
     <div id="file-context-menu" class="file-context-menu" hidden>
