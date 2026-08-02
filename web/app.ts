@@ -2229,6 +2229,17 @@ function selectEntry(view: ExplorerView, row: HTMLElement | null) {
   updateSelectionInfo(view);
 }
 
+function hasRoot(view: ExplorerView, id: number): boolean {
+  return view.state.roots.some((root) => root.id === id);
+}
+async function loadRootOptions(view: ExplorerView) {
+  view.state.roots = await api(sourceURL(view, "roots", {}));
+  view.element("root-select").innerHTML = view.state.roots
+    .map(
+      (root) => `<option value="${root.id}">${escapeHTML(root.name)}</option>`,
+    )
+    .join("");
+}
 async function initializeExplorer(
   view: ExplorerView,
   restored?: PersistedWindow,
@@ -2238,24 +2249,27 @@ async function initializeExplorer(
   view.element("view-toggle").title =
     view.state.view === "grid" ? "Use detailed list" : "Use image grid";
   try {
-    view.state.roots = await api(sourceURL(view, "roots", {}));
-    view.element("root-select").innerHTML = view.state.roots
-      .map(
-        (root) =>
-          `<option value="${root.id}">${escapeHTML(root.name)}</option>`,
-      )
-      .join("");
-    if (startRoot !== undefined && startRoot < view.state.roots.length) {
+    await loadRootOptions(view);
+    // Root IDs are a removed root's old array index, permanently
+    // reserved rather than reused (see internal/roots): once anything
+    // has ever been removed, the surviving IDs are not a dense 0..N-1
+    // range, so "is this ID less than how many roots there are" is the
+    // wrong question — it must actually be one of the IDs on offer.
+    if (startRoot !== undefined && hasRoot(view, startRoot)) {
       view.state.root = startRoot;
-      (view.element("root-select") as HTMLSelectElement).value =
-        String(startRoot);
-    }
-    if (restored && restored.root < view.state.roots.length) {
+    } else if (restored && hasRoot(view, restored.root)) {
       view.state.root = restored.root;
-      (view.element("root-select") as HTMLSelectElement).value = String(
-        restored.root,
-      );
+    } else if (!hasRoot(view, view.state.root)) {
+      // Fresh windows default to root 0, and a restored window's own
+      // root can also simply be gone now — either way, falling back to
+      // whatever root sorts first beats silently keeping an ID nothing
+      // maps to anymore.
+      const fallback = view.state.roots[0]?.id;
+      if (fallback !== undefined) view.state.root = fallback;
     }
+    (view.element("root-select") as HTMLSelectElement).value = String(
+      view.state.root,
+    );
     await navigate(view, restored?.path || "");
   } catch (error) {
     if (view.state.peer) {
@@ -3789,6 +3803,32 @@ async function removePeer(peer: Peer) {
   refreshTaskStrip();
   showToast(`Removed ${peer.name}`, "success");
 }
+// Re-fetches this machine's root list for every open local Explorer
+// window (peer windows have their own peer's roots, untouched by a
+// change here) after adding or removing one from Settings. A window
+// whose own root just vanished falls back to whatever root sorts
+// first, same as a freshly opened one would.
+async function refreshAllExplorerRoots() {
+  for (const view of explorerViews.values()) {
+    if (view.state.peer) continue;
+    const previousRoot = view.state.root;
+    try {
+      await loadRootOptions(view);
+    } catch {
+      continue;
+    }
+    if (hasRoot(view, previousRoot)) {
+      (view.element("root-select") as HTMLSelectElement).value =
+        String(previousRoot);
+      continue;
+    }
+    const fallback = view.state.roots[0]?.id;
+    if (fallback === undefined) continue;
+    view.state.root = fallback;
+    (view.element("root-select") as HTMLSelectElement).value = String(fallback);
+    await navigate(view, "");
+  }
+}
 async function afterPeerAdded(peer: Peer) {
   // The server knew about the new PC immediately; nothing on screen
   // did, because enrolledPeers was only ever read at boot. So a peer
@@ -3870,8 +3910,58 @@ async function refreshSettingsAccessState() {
   $("#settings-access-confirm-remove").hidden = true;
 }
 let settingsVersionLoaded = false;
+async function refreshSettingsRootsList() {
+  const list = $("#settings-roots-list");
+  try {
+    const items: Root[] = await api("/api/roots");
+    list.innerHTML = items
+      .map(
+        (root) =>
+          `<div class="settings-root-row"><span>${escapeHTML(root.name)}</span><button type="button" data-remove-root="${root.id}" title="Remove root"><i data-lucide="trash-2"></i></button></div>`,
+      )
+      .join("");
+    iconify();
+  } catch (error) {
+    list.innerHTML = `<p class="preview-note">${escapeHTML((error as Error).message)}</p>`;
+  }
+}
+$("#settings-roots-list").addEventListener("click", async (event) => {
+  const button = (event.target as HTMLElement).closest(
+    "[data-remove-root]",
+  ) as HTMLButtonElement | null;
+  if (!button) return;
+  button.disabled = true;
+  try {
+    await api(`/api/roots?id=${button.dataset.removeRoot}`, {
+      method: "DELETE",
+    });
+    await refreshSettingsRootsList();
+    await refreshAllExplorerRoots();
+  } catch (error) {
+    showToast((error as Error).message);
+    button.disabled = false;
+  }
+});
+$("#settings-root-add").addEventListener("click", async () => {
+  const path = window.prompt(
+    "Directory to expose (an absolute path on this machine):",
+  );
+  if (!path) return;
+  try {
+    await api("/api/roots", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ path }),
+    });
+    await refreshSettingsRootsList();
+    await refreshAllExplorerRoots();
+  } catch (error) {
+    showToast((error as Error).message);
+  }
+});
 $("#settings-button").addEventListener("click", async () => {
   await refreshSettingsAccessState();
+  await refreshSettingsRootsList();
   if (!settingsVersionLoaded) {
     settingsVersionLoaded = true;
     try {

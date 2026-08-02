@@ -36,6 +36,7 @@ import (
 	"github.com/hypernewbie/eta/internal/peers"
 	"github.com/hypernewbie/eta/internal/rangecache"
 	"github.com/hypernewbie/eta/internal/remotefile"
+	"github.com/hypernewbie/eta/internal/roots"
 	"github.com/hypernewbie/eta/internal/terminal"
 	"github.com/hypernewbie/eta/internal/tmux"
 	"github.com/hypernewbie/eta/internal/transfer"
@@ -74,10 +75,19 @@ func (r *rootsFlag) Set(value string) error {
 type root struct {
 	Name string
 	Path string
+	// Removed roots keep their slot rather than being spliced out (see
+	// internal/roots's doc comment): a root's index is its ID, referenced
+	// by every persisted shortcut, window and transfer job, and reusing a
+	// removed root's index for a different directory would silently
+	// repoint every one of those at the wrong place.
+	Removed bool
 }
 
 type server struct {
 	roots        []root
+	rootsStore   *roots.Store
+	rootsPath    string
+	rootsMu      sync.Mutex
 	web          fs.FS
 	thumbs       *thumbnailCache
 	identity     hostid.Identity
@@ -113,7 +123,9 @@ type entry struct {
 }
 
 func main() {
-	var roots rootsFlag
+	// Named rootPaths, not roots: this package now also imports
+	// internal/roots, and main is exactly where both are needed.
+	var rootPaths rootsFlag
 	port := flag.Int("port", 7080, "HTTP port")
 	ip := flag.String("ip", "lan", `bind address; "lan" matches Phi: loopback + private LAN + Tailnet`)
 	// Cache defaults were consciously chosen, not silently accepted
@@ -137,7 +149,8 @@ func main() {
 	transferDir := flag.String("transfer-dir", "", "directory for resumable transfer staging (default: user cache directory)")
 	advertiseURL := flag.String("advertise-url", "", "public http(s) URL peers use to send files here (default: request host)")
 	versionFlag := flag.Bool("version", false, "print version and exit")
-	flag.Var(&roots, "root", "directory to expose (repeatable; defaults to the current directory)")
+	rootsFile := flag.String("roots-file", "", "persistent root-directory inventory file (default: user config directory)")
+	flag.Var(&rootPaths, "root", "directory to expose (repeatable; defaults to the current directory; ignored once --roots-file already has entries, since roots are then managed from Settings)")
 	flag.Parse()
 
 	if *versionFlag {
@@ -145,12 +158,12 @@ func main() {
 		return
 	}
 
-	if len(roots) == 0 {
+	if len(rootPaths) == 0 {
 		cwd, err := os.Getwd()
 		if err != nil {
 			log.Fatal(err)
 		}
-		roots = append(roots, cwd)
+		rootPaths = append(rootPaths, cwd)
 	}
 
 	identityPath := *identityFile
@@ -170,13 +183,46 @@ func main() {
 		log.Fatal(err)
 	}
 
-	s, err := newServer(roots)
+	s, err := newServer(rootPaths)
 	if err != nil {
 		log.Fatal(err)
 	}
 	s.identity = identity
 	s.identityPath = identityPath
 	s.advertiseURL = strings.TrimSuffix(*advertiseURL, "/")
+	rootsPath := *rootsFile
+	if rootsPath == "" {
+		rootsPath, err = roots.DefaultPath()
+		if err != nil {
+			log.Fatal(err)
+		}
+	}
+	s.rootsPath = rootsPath
+	s.rootsStore = roots.New(rootsPath)
+	persistedRoots, err := s.rootsStore.Load()
+	if err != nil {
+		log.Fatal(err)
+	}
+	if len(persistedRoots) == 0 {
+		// First run: seed the persisted list from what newServer just
+		// validated from -root flags (or the default cwd), so the file
+		// becomes the source of truth for every run after this one
+		// rather than being CLI-driven forever.
+		for _, r := range s.roots {
+			persistedRoots = append(persistedRoots, roots.Root{Name: r.Name, Path: r.Path})
+		}
+		if err := s.rootsStore.SaveAll(persistedRoots); err != nil {
+			log.Fatal(err)
+		}
+	} else {
+		// The persisted list is authoritative once it exists: someone may
+		// have since added or removed a root from Settings, and a stale
+		// -root flag left over from the first run should not silently
+		// reintroduce a root that was removed, or fail to reflect one
+		// that was added.
+		log.Printf("using the root inventory at %s; --root is only used to seed it on first run", rootsPath)
+	}
+	s.applyPersistedRoots(persistedRoots)
 	statePath := *stateFile
 	if statePath == "" {
 		statePath, err = uistate.DefaultPath()
@@ -337,17 +383,9 @@ func newServer(paths []string) (*server, error) {
 	s.shutdownCancel = cancel
 	seen := map[string]bool{}
 	for _, path := range paths {
-		absolute, err := filepath.Abs(path)
+		realPath, err := resolveRootPath(path)
 		if err != nil {
-			return nil, fmt.Errorf("resolve root %q: %w", path, err)
-		}
-		realPath, err := filepath.EvalSymlinks(absolute)
-		if err != nil {
-			return nil, fmt.Errorf("resolve root %q: %w", path, err)
-		}
-		info, err := os.Stat(realPath)
-		if err != nil || !info.IsDir() {
-			return nil, fmt.Errorf("root %q is not a directory", path)
+			return nil, err
 		}
 		if seen[realPath] {
 			continue
@@ -360,6 +398,73 @@ func newServer(paths []string) (*server, error) {
 		s.treeStores[i] = transfer.NewTreeStore(r.Path)
 	}
 	return s, nil
+}
+
+// resolveRootPath validates and canonicalizes a candidate root
+// directory: absolute, symlinks resolved, must exist and be a
+// directory. Shared between -root flag parsing at startup (via
+// newServer) and the POST /api/roots handler, so both enforce exactly
+// the same rule rather than two copies that could drift.
+func resolveRootPath(path string) (string, error) {
+	absolute, err := filepath.Abs(path)
+	if err != nil {
+		return "", fmt.Errorf("resolve root %q: %w", path, err)
+	}
+	realPath, err := filepath.EvalSymlinks(absolute)
+	if err != nil {
+		return "", fmt.Errorf("resolve root %q: %w", path, err)
+	}
+	info, err := os.Stat(realPath)
+	if err != nil || !info.IsDir() {
+		return "", fmt.Errorf("root %q is not a directory", path)
+	}
+	return realPath, nil
+}
+
+// validRoot reports whether id both exists and has not been removed.
+// Every handler that takes a root ID from a request checks this instead
+// of a bare bounds check, so a request naming a removed root's old
+// index is refused rather than still quietly working.
+func (s *server) validRoot(id int) bool {
+	return id >= 0 && id < len(s.roots) && !s.roots[id].Removed
+}
+
+// applyPersistedRoots rebuilds s.roots and s.treeStores from a
+// roots.Root list, position for position, so the in-memory arrays this
+// server has always read directly stay in lockstep with what is on
+// disk. Called at startup and after every add/remove.
+//
+// The swap is locked; the many existing read sites (s.roots[i], as
+// they were before this feature) are not, and were not retrofitted
+// with per-call-site locking. That is a deliberate, disclosed tradeoff:
+// root mutation is a rare, explicit admin action through Settings, not
+// a hot path, and touching every one of the two dozen existing read
+// sites risked missing one for a race that has no realistic trigger in
+// how this feature is actually used.
+func (s *server) applyPersistedRoots(list []roots.Root) {
+	built := make([]root, len(list))
+	stores := make([]*transfer.TreeStore, len(list))
+	s.rootsMu.Lock()
+	oldRoots, oldStores := s.roots, s.treeStores
+	for i, r := range list {
+		built[i] = root{Name: r.Name, Path: r.Path, Removed: r.Removed}
+		if r.Removed {
+			continue
+		}
+		// Reuse the existing TreeStore when this index's path is
+		// unchanged, so adding or removing a *different* root cannot
+		// drop another root's in-progress tree-transfer session —
+		// rebuilding every slot unconditionally on every mutation would
+		// do exactly that.
+		if i < len(oldRoots) && oldRoots[i].Path == r.Path && !oldRoots[i].Removed && oldStores[i] != nil {
+			stores[i] = oldStores[i]
+		} else {
+			stores[i] = transfer.NewTreeStore(r.Path)
+		}
+	}
+	s.roots = built
+	s.treeStores = stores
+	s.rootsMu.Unlock()
 }
 
 func (s *server) routes() http.Handler {
@@ -391,6 +496,8 @@ func (s *server) routes() http.Handler {
 	mux.HandleFunc("POST /api/state", s.handleStatePut)
 	mux.HandleFunc("PUT /api/state", s.handleStatePut)
 	mux.HandleFunc("GET /api/roots", s.handleRoots)
+	mux.HandleFunc("POST /api/roots", s.handleRootAdd)
+	mux.HandleFunc("DELETE /api/roots", s.handleRootRemove)
 	mux.HandleFunc("GET /api/peers", s.handlePeers)
 	mux.HandleFunc("POST /api/terminals", s.handleTerminalStart)
 	mux.HandleFunc("GET /api/terminals/{id}", s.handleTerminalOutput)
@@ -1011,7 +1118,7 @@ func (s *server) resumePendingJobs(ctx context.Context) {
 		if job.SourcePath == "" || job.DestinationPath == "" {
 			continue
 		}
-		if job.SourceRoot < 0 || job.SourceRoot >= len(s.roots) {
+		if !s.validRoot(job.SourceRoot) {
 			continue
 		}
 		if job.SourcePeer != "" {
@@ -1486,7 +1593,7 @@ func newTransferID() (string, error) {
 	return fmt.Sprintf("%x", raw), nil
 }
 func (s *server) transferDestination(rootID int, raw string) (string, error) {
-	if rootID < 0 || rootID >= len(s.roots) {
+	if !s.validRoot(rootID) {
 		return "", errors.New("unknown root")
 	}
 	relative := filepath.Clean(filepath.FromSlash(raw))
@@ -1941,7 +2048,7 @@ func (s *server) handleDirectoryCreate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	if request.Root < 0 || request.Root >= len(s.roots) {
+	if !s.validRoot(request.Root) {
 		writeError(w, errors.New("invalid root"))
 		return
 	}
@@ -1967,7 +2074,7 @@ func (s *server) handleCopy(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	if request.SourceRoot < 0 || request.SourceRoot >= len(s.roots) || request.DestinationRoot < 0 || request.DestinationRoot >= len(s.roots) {
+	if !s.validRoot(request.SourceRoot) || !s.validRoot(request.DestinationRoot) {
 		writeError(w, errors.New("invalid root"))
 		return
 	}
@@ -1998,7 +2105,7 @@ func (s *server) handleRename(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	if request.Root < 0 || request.Root >= len(s.roots) {
+	if !s.validRoot(request.Root) {
 		writeError(w, errors.New("invalid root"))
 		return
 	}
@@ -2022,7 +2129,7 @@ func (s *server) handleDelete(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	if request.Root < 0 || request.Root >= len(s.roots) {
+	if !s.validRoot(request.Root) {
 		writeError(w, errors.New("invalid root"))
 		return
 	}
@@ -2037,16 +2144,94 @@ func (s *server) handleDelete(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
+type publicRoot struct {
+	ID   int    `json:"id"`
+	Name string `json:"name"`
+}
+
 func (s *server) handleRoots(w http.ResponseWriter, _ *http.Request) {
-	type publicRoot struct {
-		ID   int    `json:"id"`
-		Name string `json:"name"`
-	}
-	out := make([]publicRoot, len(s.roots))
+	// A removed root's index is never reused (see internal/roots), so
+	// skipping it here rather than compacting the list still leaves
+	// every remaining root's ID meaning the same thing it always did.
+	out := make([]publicRoot, 0, len(s.roots))
 	for i, root := range s.roots {
-		out[i] = publicRoot{ID: i, Name: root.Name}
+		if root.Removed {
+			continue
+		}
+		out = append(out, publicRoot{ID: i, Name: root.Name})
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+// handleRootAdd validates and appends a new root directory. Local paths
+// are not shown to the browser anywhere else (see hostid.Identity's own
+// doc comment on this) and this endpoint keeps that: the response, like
+// GET /api/roots, is {id, name} only — never the path the caller sent.
+func (s *server) handleRootAdd(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.rootsStore == nil {
+		writeError(w, errors.New("root inventory is unavailable"))
+		return
+	}
+	var request struct {
+		Path string `json:"path"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&request); err != nil {
+		writeError(w, err)
+		return
+	}
+	if strings.TrimSpace(request.Path) == "" {
+		writeError(w, errors.New("path is required"))
+		return
+	}
+	realPath, err := resolveRootPath(request.Path)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	list, err := s.rootsStore.Add(filepath.Base(realPath), realPath)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	s.applyPersistedRoots(list)
+	// The new root's ID is wherever Add put it — appended, or a
+	// reactivated slot — not necessarily len(list)-1's neighbor, so it is
+	// found the same way handleRoots reports IDs: by position, skipping
+	// removed entries alongside it.
+	id := -1
+	for i, item := range list {
+		if !item.Removed && item.Path == realPath {
+			id = i
+		}
+	}
+	writeJSON(w, http.StatusCreated, publicRoot{ID: id, Name: filepath.Base(realPath)})
+}
+
+func (s *server) handleRootRemove(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodDelete {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.rootsStore == nil {
+		writeError(w, errors.New("root inventory is unavailable"))
+		return
+	}
+	id, err := strconv.Atoi(r.URL.Query().Get("id"))
+	if err != nil {
+		writeError(w, errors.New("invalid root id"))
+		return
+	}
+	list, err := s.rootsStore.Remove(id)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	s.applyPersistedRoots(list)
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
 func (s *server) handleList(w http.ResponseWriter, r *http.Request) {
@@ -2214,7 +2399,7 @@ func (s *server) handleFile(w http.ResponseWriter, r *http.Request) {
 
 func (s *server) target(r *http.Request) (int, string, string, error) {
 	rootID, err := strconv.Atoi(r.URL.Query().Get("root"))
-	if err != nil || rootID < 0 || rootID >= len(s.roots) {
+	if err != nil || !s.validRoot(rootID) {
 		return 0, "", "", errors.New("unknown root")
 	}
 	relative := filepath.Clean(filepath.FromSlash(r.URL.Query().Get("path")))

@@ -17,6 +17,7 @@ import (
 
 	"github.com/hypernewbie/eta/internal/diskcache"
 	"github.com/hypernewbie/eta/internal/peers"
+	"github.com/hypernewbie/eta/internal/roots"
 	"github.com/hypernewbie/eta/internal/terminal"
 	"github.com/hypernewbie/eta/internal/tmux"
 	"github.com/hypernewbie/eta/internal/transfer"
@@ -832,5 +833,174 @@ func TestVersionAndChangelogEndpoints(t *testing.T) {
 		if w.Code != http.StatusOK {
 			t.Errorf("%s with a password set: got %d, want public", path, w.Code)
 		}
+	}
+}
+
+// enableRootManagement wires a test server's rootsStore, mirroring what
+// main() does at startup — newServer alone never sets this up, so a
+// test server's roots are startup-only unless this is called.
+func enableRootManagement(t *testing.T, s *server) {
+	t.Helper()
+	s.rootsPath = filepath.Join(t.TempDir(), "roots.json")
+	s.rootsStore = roots.New(s.rootsPath)
+	seed := make([]roots.Root, len(s.roots))
+	for i, r := range s.roots {
+		seed[i] = roots.Root{Name: r.Name, Path: r.Path}
+	}
+	if err := s.rootsStore.SaveAll(seed); err != nil {
+		t.Fatal(err)
+	}
+	s.applyPersistedRoots(seed)
+}
+
+func TestRootAddAndListRoundTrip(t *testing.T) {
+	server, err := newServer([]string{t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	enableRootManagement(t, server)
+	newDir := t.TempDir()
+
+	addW := httptest.NewRecorder()
+	server.routes().ServeHTTP(addW, httptest.NewRequest(http.MethodPost, "/api/roots", strings.NewReader(`{"path":"`+newDir+`"}`)))
+	if addW.Code != http.StatusCreated {
+		t.Fatalf("add: %d %s", addW.Code, addW.Body.String())
+	}
+	var added publicRoot
+	if err := json.NewDecoder(addW.Body).Decode(&added); err != nil {
+		t.Fatal(err)
+	}
+	if added.ID != 1 {
+		t.Fatalf("expected the new root at id 1, got %d", added.ID)
+	}
+
+	listW := httptest.NewRecorder()
+	server.routes().ServeHTTP(listW, httptest.NewRequest(http.MethodGet, "/api/roots", nil))
+	var list []publicRoot
+	if err := json.NewDecoder(listW.Body).Decode(&list); err != nil {
+		t.Fatal(err)
+	}
+	if len(list) != 2 {
+		t.Fatalf("expected 2 roots, got %#v", list)
+	}
+}
+
+func TestRootAddRejectsANonDirectoryOrDuplicate(t *testing.T) {
+	dir := t.TempDir()
+	server, err := newServer([]string{dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	enableRootManagement(t, server)
+
+	notADir := filepath.Join(t.TempDir(), "file.txt")
+	if err := os.WriteFile(notADir, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	w := httptest.NewRecorder()
+	server.routes().ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/api/roots", strings.NewReader(`{"path":"`+notADir+`"}`)))
+	if w.Code == http.StatusCreated {
+		t.Fatal("a file was accepted as a root")
+	}
+
+	w = httptest.NewRecorder()
+	server.routes().ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/api/roots", strings.NewReader(`{"path":"`+dir+`"}`)))
+	if w.Code == http.StatusCreated {
+		t.Fatal("an already-added root was accepted a second time")
+	}
+}
+
+// The whole point of this feature: removing an earlier root must not
+// let a later one, or anything that already named it by index, resolve
+// to a different directory than the one it always meant.
+func TestRemovedRootIndexIsNeverReassignedToADifferentDirectory(t *testing.T) {
+	dirA, dirB, dirC := t.TempDir(), t.TempDir(), t.TempDir()
+	if err := os.WriteFile(filepath.Join(dirB, "b-marker.txt"), []byte("b"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	server, err := newServer([]string{dirA, dirB, dirC})
+	if err != nil {
+		t.Fatal(err)
+	}
+	enableRootManagement(t, server)
+
+	// Remove root 0 (dirA).
+	removeW := httptest.NewRecorder()
+	server.routes().ServeHTTP(removeW, httptest.NewRequest(http.MethodDelete, "/api/roots?id=0", nil))
+	if removeW.Code != http.StatusOK {
+		t.Fatalf("remove: %d %s", removeW.Code, removeW.Body.String())
+	}
+
+	// Root 1 (dirB) must still be dirB — listing it must still find the
+	// marker file that only exists in dirB, not whatever a naive
+	// splice-based removal would have shifted into slot 1.
+	listReq := httptest.NewRequest(http.MethodGet, "/api/list?root=1&path=", nil)
+	listW := httptest.NewRecorder()
+	server.routes().ServeHTTP(listW, listReq)
+	if listW.Code != http.StatusOK {
+		t.Fatalf("list root 1: %d %s", listW.Code, listW.Body.String())
+	}
+	if !strings.Contains(listW.Body.String(), "b-marker.txt") {
+		t.Fatalf("root 1 no longer resolves to dirB: %s", listW.Body.String())
+	}
+
+	// A request still naming the removed root 0 must be refused, not
+	// silently served from nothing (root 0's slot has no replacement —
+	// this asserts that explicitly, in case a future change ever gives
+	// it one).
+	staleReq := httptest.NewRequest(http.MethodGet, "/api/list?root=0&path=", nil)
+	staleW := httptest.NewRecorder()
+	server.routes().ServeHTTP(staleW, staleReq)
+	if staleW.Code == http.StatusOK {
+		t.Fatalf("a removed root's index still served a request: %s", staleW.Body.String())
+	}
+
+	// The public listing must also have dropped it.
+	rootsW := httptest.NewRecorder()
+	server.routes().ServeHTTP(rootsW, httptest.NewRequest(http.MethodGet, "/api/roots", nil))
+	var publicList []publicRoot
+	if err := json.NewDecoder(rootsW.Body).Decode(&publicList); err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range publicList {
+		if r.ID == 0 {
+			t.Fatalf("removed root 0 still appears in the public list: %#v", publicList)
+		}
+	}
+	if len(publicList) != 2 {
+		t.Fatalf("expected 2 active roots (1 and 2), got %#v", publicList)
+	}
+}
+
+func TestRootRemoveRejectsUnknownID(t *testing.T) {
+	server, err := newServer([]string{t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	enableRootManagement(t, server)
+	w := httptest.NewRecorder()
+	server.routes().ServeHTTP(w, httptest.NewRequest(http.MethodDelete, "/api/roots?id=99", nil))
+	if w.Code == http.StatusOK {
+		t.Fatal("an out-of-range root id was accepted for removal")
+	}
+}
+
+func TestRootManagementUnavailableWithoutAStore(t *testing.T) {
+	// A plain newServer() (every other test in this file) never wires
+	// rootsStore -- these endpoints must fail clearly, not panic on a
+	// nil store.
+	server, err := newServer([]string{t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	addW := httptest.NewRecorder()
+	server.routes().ServeHTTP(addW, httptest.NewRequest(http.MethodPost, "/api/roots", strings.NewReader(`{"path":"`+t.TempDir()+`"}`)))
+	if addW.Code == http.StatusCreated {
+		t.Fatal("root add succeeded without a rootsStore")
+	}
+	removeW := httptest.NewRecorder()
+	server.routes().ServeHTTP(removeW, httptest.NewRequest(http.MethodDelete, "/api/roots?id=0", nil))
+	if removeW.Code == http.StatusOK {
+		t.Fatal("root remove succeeded without a rootsStore")
 	}
 }

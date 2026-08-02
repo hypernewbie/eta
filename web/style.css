@@ -663,6 +663,68 @@ svg.file-type-icon {
 .settings-access-remove-link:hover {
   color: var(--danger, #ef6b73);
 }
+.settings-roots-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.settings-root-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border: 1px solid var(--bg-border);
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.15);
+  color: var(--text-primary);
+  font-size: 12px;
+}
+.settings-root-row span {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.settings-root-row button {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+.settings-root-row button svg {
+  width: 13px;
+}
+.settings-root-row button:hover {
+  color: var(--danger, #ef6b73);
+  background: color-mix(in srgb, var(--danger, #ef6b73) 12%, transparent);
+}
+.settings-root-add {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  align-self: flex-start;
+  padding: 6px 10px;
+  border: 1px dashed var(--bg-border);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 11px;
+  cursor: pointer;
+}
+.settings-root-add svg {
+  width: 13px;
+}
+.settings-root-add:hover {
+  color: var(--accent-bright);
+  border-color: color-mix(in srgb, var(--accent) 40%, transparent);
+}
 .settings-about-row {
   display: flex;
   align-items: center;
