@@ -32,7 +32,7 @@ func (s *server) accessAuthMiddleware(next http.Handler) http.Handler {
 
 func (s *server) accessPublicPath(path string) bool {
 	switch path {
-	case "/api/auth/status", "/api/auth/login", "/api/healthz":
+	case "/api/auth/status", "/api/auth/login", "/api/healthz", "/api/version", "/api/changelog":
 		return true
 	// Deliberately public regardless of password: it carries no paths,
 	// addresses, or credentials (see hostid.Identity's doc comment), and

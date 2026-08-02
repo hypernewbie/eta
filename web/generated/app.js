@@ -1112,13 +1112,21 @@ async function loadText(view, entry) {
 function fileFacts(entry) {
     return `<div class="preview-facts"><span>${escapeHTML(entry.name)}</span><span>${bytes(entry.size)}</span><span>${date(entry.modified)}</span></div>`;
 }
-function renderMarkdown(raw, truncated) {
+// Shared between the file viewer and the changelog dialog, so both
+// render markdown through exactly one sanitize step rather than two
+// copies that could drift.
+function markdownToSafeHTML(raw) {
     if (!window.marked || !window.DOMPurify)
-        return `<pre class="preview-text">${escapeHTML(raw)}</pre>`;
+        return null;
     window.marked.setOptions({ gfm: true, breaks: false });
-    const html = window.DOMPurify.sanitize(window.marked.parse(raw), {
+    return window.DOMPurify.sanitize(window.marked.parse(raw), {
         USE_PROFILES: { html: true },
     });
+}
+function renderMarkdown(raw, truncated) {
+    const html = markdownToSafeHTML(raw);
+    if (html === null)
+        return `<pre class="preview-text">${escapeHTML(raw)}</pre>`;
     return `<article class="markdown-preview">${html}</article>${truncated ? '<p class="preview-note">Preview truncated at 512 KB.</p>' : ""}`;
 }
 function renderText(raw, truncated, ext) {
@@ -3418,11 +3426,53 @@ async function refreshSettingsAccessState() {
     $("#settings-access-remove").hidden = !settingsAccessEnabled;
     $("#settings-access-confirm-remove").hidden = true;
 }
+let settingsVersionLoaded = false;
 $("#settings-button").addEventListener("click", async () => {
     await refreshSettingsAccessState();
+    if (!settingsVersionLoaded) {
+        settingsVersionLoaded = true;
+        try {
+            const info = await api("/api/version");
+            const short = (info.commit || "").slice(0, 7);
+            $("#settings-version").textContent =
+                info.version && info.version !== "dev"
+                    ? `v${info.version}${short ? ` · ${short}` : ""}`
+                    : "dev build";
+            $("#settings-version").title =
+                [info.date, info.build_source].filter(Boolean).join(" · ") ||
+                    "unknown build";
+        }
+        catch {
+            // Version is cosmetic; leave the "v?" placeholder rather than
+            // block the rest of the dialog on it.
+            settingsVersionLoaded = false;
+        }
+    }
     $("#settings-dialog").show();
 });
 $("#settings-close").addEventListener("click", () => $("#settings-dialog").hide());
+$("#settings-changelog-button").addEventListener("click", async () => {
+    const content = $("#changelog-content");
+    content.innerHTML = '<div class="empty"><sl-spinner></sl-spinner></div>';
+    $("#changelog-dialog").show();
+    try {
+        const response = await fetch("/api/changelog");
+        if (!response.ok)
+            throw new Error(`Request failed (${response.status})`);
+        const raw = await response.text();
+        const html = markdownToSafeHTML(raw);
+        content.innerHTML =
+            html ?? `<pre class="preview-text">${escapeHTML(raw)}</pre>`;
+        content
+            .querySelectorAll("pre code")
+            .forEach((block) => window.Prism?.highlightElement(block));
+        iconify();
+    }
+    catch (error) {
+        content.innerHTML = `<p class="preview-note">${escapeHTML(error.message)}</p>`;
+    }
+});
+$("#changelog-close").addEventListener("click", () => $("#changelog-dialog").hide());
 function settingsAccessShowError(message) {
     $("#settings-access-error").textContent = message;
     $("#settings-access-new").classList.toggle("is-invalid", !!message);

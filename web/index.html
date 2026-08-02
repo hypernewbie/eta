@@ -357,10 +357,27 @@
           >Set password</sl-button
         >
       </div>
+      <div class="settings-group-label">About</div>
+      <div class="settings-about-row">
+        <span class="settings-about-glyph">η</span>
+        <div class="settings-about-text">
+          <div>eta</div>
+          <div id="settings-version" class="settings-version">v?</div>
+        </div>
+        <sl-button id="settings-changelog-button" size="small"
+          >What's new</sl-button
+        >
+      </div>
       <div slot="footer">
         <sl-button id="settings-close">Close</sl-button>
       </div>
     </sl-dialog>
+    <sl-dialog id="changelog-dialog" label="What's new" class="changelog-dialog"
+      ><div id="changelog-content" class="markdown-preview"></div>
+      <div slot="footer">
+        <sl-button id="changelog-close">Close</sl-button>
+      </div></sl-dialog
+    >
     <sl-alert id="error-toast" variant="danger" duration="5000" closable
       ><i slot="icon" data-lucide="circle-alert"></i
       ><span id="error-message"></span

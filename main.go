@@ -45,6 +45,22 @@ import (
 //go:embed all:web
 var embeddedWeb embed.FS
 
+//go:embed CHANGELOG.md
+var embeddedChangelog []byte
+
+// Overridden at build time via
+// -ldflags "-X main.Version=v0.2.0 -X main.Commit=$(git rev-parse --short HEAD) -X main.Date=$(date -u +%Y-%m-%dT%H:%M:%SZ) -X main.BuildSource=release".
+// A plain `go build` (what every dev loop in this repo uses) leaves
+// these as the obvious "this is not a tagged release" defaults — no
+// release pipeline exists yet to set them automatically, so an unset
+// value should read as unset, not as a plausible-looking fake version.
+var (
+	Version     = "dev"
+	Commit      = "none"
+	Date        = "unknown"
+	BuildSource = "source"
+)
+
 const previewLimit = 512 << 10
 
 type rootsFlag []string
@@ -120,8 +136,14 @@ func main() {
 	hotRangeCacheSize := flag.String("hot-range-cache-size", "64MB", "maximum RAM used by hot remote ranges")
 	transferDir := flag.String("transfer-dir", "", "directory for resumable transfer staging (default: user cache directory)")
 	advertiseURL := flag.String("advertise-url", "", "public http(s) URL peers use to send files here (default: request host)")
+	versionFlag := flag.Bool("version", false, "print version and exit")
 	flag.Var(&roots, "root", "directory to expose (repeatable; defaults to the current directory)")
 	flag.Parse()
+
+	if *versionFlag {
+		fmt.Printf("eta %s (commit: %s, built: %s, source: %s)\n", Version, Commit, Date, BuildSource)
+		return
+	}
 
 	if len(roots) == 0 {
 		cwd, err := os.Getwd()
@@ -347,6 +369,22 @@ func (s *server) routes() http.Handler {
 	mux.HandleFunc("POST /api/auth/password", s.handleAuthPassword)
 	mux.HandleFunc("GET /api/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+	})
+	mux.HandleFunc("GET /api/version", func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(w, http.StatusOK, map[string]string{
+			"version":      Version,
+			"commit":       Commit,
+			"date":         Date,
+			"build_source": BuildSource,
+		})
+	})
+	// Served from the embedded copy, not disk — same reason the web
+	// assets are go:embed rather than a static directory: a single
+	// binary with no external files it depends on to run correctly.
+	mux.HandleFunc("GET /api/changelog", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/markdown; charset=utf-8")
+		w.Header().Set("Cache-Control", "no-store")
+		_, _ = w.Write(embeddedChangelog)
 	})
 	mux.HandleFunc("/api/identity", s.handleIdentity)
 	mux.HandleFunc("GET /api/state", s.handleStateGet)

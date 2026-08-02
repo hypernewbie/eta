@@ -787,3 +787,50 @@ func TestTerminalStartWithEditOpensVimOnTheFile(t *testing.T) {
 		t.Fatalf("vim's screen never mentioned the file name; got %q", output)
 	}
 }
+
+func TestVersionAndChangelogEndpoints(t *testing.T) {
+	server, err := newServer([]string{t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	versionW := httptest.NewRecorder()
+	server.routes().ServeHTTP(versionW, httptest.NewRequest(http.MethodGet, "/api/version", nil))
+	if versionW.Code != http.StatusOK {
+		t.Fatalf("version: %d %s", versionW.Code, versionW.Body.String())
+	}
+	var version struct {
+		Version     string `json:"version"`
+		Commit      string `json:"commit"`
+		Date        string `json:"date"`
+		BuildSource string `json:"build_source"`
+	}
+	if err := json.NewDecoder(versionW.Body).Decode(&version); err != nil {
+		t.Fatal(err)
+	}
+	// An untagged local build (what every dev loop in this repo uses)
+	// must read as unset, not as a plausible-looking fake version.
+	if version.Version != "dev" || version.Commit != "none" || version.BuildSource != "source" {
+		t.Fatalf("unexpected default version info: %#v", version)
+	}
+
+	changelogW := httptest.NewRecorder()
+	server.routes().ServeHTTP(changelogW, httptest.NewRequest(http.MethodGet, "/api/changelog", nil))
+	if changelogW.Code != http.StatusOK {
+		t.Fatalf("changelog: %d", changelogW.Code)
+	}
+	if !strings.Contains(changelogW.Body.String(), "# Changelog") {
+		t.Fatalf("changelog body did not look like CHANGELOG.md: %q", changelogW.Body.String()[:min(80, changelogW.Body.Len())])
+	}
+
+	// Both stay reachable even with a password set: version and
+	// changelog carry no secrets, and are useful on a login screen.
+	setPassword(t, server, "some-password")
+	for _, path := range []string{"/api/version", "/api/changelog"} {
+		w := httptest.NewRecorder()
+		server.routes().ServeHTTP(w, httptest.NewRequest(http.MethodGet, path, nil))
+		if w.Code != http.StatusOK {
+			t.Errorf("%s with a password set: got %d, want public", path, w.Code)
+		}
+	}
+}
