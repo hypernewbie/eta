@@ -530,6 +530,12 @@ func (s *server) handleTerminalStart(w http.ResponseWriter, r *http.Request) {
 		Columns uint16 `json:"columns"`
 		Rows    uint16 `json:"rows"`
 		Tmux    string `json:"tmux"`
+		// Edit opens the file at Path directly in vim inside the new
+		// terminal, instead of a shell sitting in its directory. The
+		// simplest possible "editor": no browser-side editor component,
+		// no save endpoint, no conflict-with-external-edits problem to
+		// solve — the terminal already has all of that solved.
+		Edit bool `json:"edit"`
 	}
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&request); err != nil {
 		writeError(w, err)
@@ -541,13 +547,26 @@ func (s *server) handleTerminalStart(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	if info, err := os.Stat(target); err != nil {
+	info, err := os.Stat(target)
+	if err != nil {
 		writeError(w, err)
 		return
+	}
+	var editArgv []string
+	if request.Edit && !info.IsDir() {
+		// vim runs in the file's own directory with just its base name,
+		// not the absolute path — an absolute path would work too, but a
+		// relative one is what :w naturally saves back to and matches
+		// what someone would type by hand.
+		editArgv = []string{"vim", filepath.Base(target)}
+		target = filepath.Dir(target)
 	} else if !info.IsDir() {
 		target = filepath.Dir(target)
 	}
 	start := func() (string, error) {
+		if editArgv != nil {
+			return s.terminals.StartCommand(target, request.Columns, request.Rows, editArgv)
+		}
 		if request.Tmux == "" {
 			return s.terminals.Start(target, request.Columns, request.Rows)
 		}

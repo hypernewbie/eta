@@ -732,3 +732,58 @@ func TestTmuxCreateRejectsUnsafeName(t *testing.T) {
 		t.Fatalf("unsafe session name accepted: %s", response.Body.String())
 	}
 }
+
+// A file's own directory, not a shell that has to be told where to go —
+// this is Eta's whole "editor": open a terminal that already dropped you
+// into vim on the file. Skips rather than fails on a machine without
+// vim, the same way the tmux tests handle tmux's absence.
+func TestTerminalStartWithEditOpensVimOnTheFile(t *testing.T) {
+	if _, err := exec.LookPath("vim"); err != nil {
+		t.Skip("vim not installed")
+	}
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "notes.txt"), []byte("hello\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	server, err := newServer([]string{dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := httptest.NewRequest(http.MethodPost, "/api/terminals",
+		strings.NewReader(`{"root":0,"path":"notes.txt","columns":80,"rows":24,"edit":true}`))
+	startW := httptest.NewRecorder()
+	server.routes().ServeHTTP(startW, start)
+	if startW.Code != http.StatusCreated {
+		t.Fatalf("start: %d %s", startW.Code, startW.Body.String())
+	}
+	var created struct {
+		ID string `json:"id"`
+	}
+	if err := json.NewDecoder(startW.Body).Decode(&created); err != nil {
+		t.Fatal(err)
+	}
+
+	// vim's initial screen names the file it opened, somewhere in its
+	// status/ruler area, so its presence in the raw PTY output is a
+	// reasonable signal that vim actually started on this file rather
+	// than a shell landing in its directory.
+	deadline := time.Now().Add(3 * time.Second)
+	var output string
+	for time.Now().Before(deadline) {
+		outW := httptest.NewRecorder()
+		server.routes().ServeHTTP(outW, httptest.NewRequest(http.MethodGet, "/api/terminals/"+created.ID, nil))
+		var body struct {
+			Output string `json:"output"`
+		}
+		if err := json.NewDecoder(outW.Body).Decode(&body); err == nil {
+			output = body.Output
+			if strings.Contains(output, "notes.txt") {
+				break
+			}
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if !strings.Contains(output, "notes.txt") {
+		t.Fatalf("vim's screen never mentioned the file name; got %q", output)
+	}
+}

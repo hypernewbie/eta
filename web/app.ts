@@ -1400,6 +1400,12 @@ type TerminalTarget = {
   path: string;
   label: string;
   tmux?: string;
+  // Opens vim directly on path (which must be a file, not a directory)
+  // instead of a shell sitting in its directory — Eta's entire "edit"
+  // feature. No browser editor, no save endpoint, nothing that could
+  // race an edit made outside Eta: the terminal already owns all of
+  // that.
+  edit?: boolean;
 };
 async function openTerminal(view: ExplorerView, entry: Entry) {
   return openTerminalWindow({
@@ -1433,13 +1439,16 @@ async function openTerminalWindow(target: TerminalTarget) {
         columns: 120,
         rows: 32,
         ...(target.tmux ? { tmux: target.tmux } : {}),
+        ...(target.edit ? { edit: true } : {}),
       }),
     },
   );
   const key = `terminal:${created.id}`;
   const label = target.tmux
     ? `tmux — ${target.tmux}`
-    : `Terminal — ${target.label}`;
+    : target.edit
+      ? `vim — ${target.label}`
+      : `Terminal — ${target.label}`;
   const title = target.peer
     ? `${target.peer.glyph} ${label}`
     : hostWindowTitle(label);
@@ -1646,6 +1655,7 @@ async function openInspector(
   actions.innerHTML =
     '<span class="inspector-facts"></span>' +
     '<span class="inspector-buttons">' +
+    '<button type="button" class="inspector-edit icon-button" title="Edit in vim" disabled><i data-lucide="square-terminal"></i></button>' +
     '<button type="button" class="inspector-wrap icon-button" title="Toggle word wrap" aria-pressed="false"><i data-lucide="wrap-text"></i></button>' +
     '<button type="button" class="inspector-copy icon-button" title="Copy text" disabled><i data-lucide="copy"></i></button>' +
     '<button type="button" class="inspector-download icon-button" title="Download"><i data-lucide="download"></i></button>' +
@@ -1730,6 +1740,18 @@ async function openInspector(
     const wrapped = pre!.classList.toggle("is-wrapped");
     wrap.setAttribute("aria-pressed", String(wrapped));
     wrap.classList.toggle("is-active", wrapped);
+  });
+
+  const edit = actions.querySelector(".inspector-edit") as HTMLButtonElement;
+  edit.disabled = result.binary || !result.rawText;
+  edit.addEventListener("click", () => {
+    void openTerminalWindow({
+      peer: view.state.peer,
+      root: view.state.root,
+      path: entry.path,
+      label: entry.name,
+      edit: true,
+    });
   });
 
   const copy = actions.querySelector(".inspector-copy") as HTMLButtonElement;
