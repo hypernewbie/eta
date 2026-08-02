@@ -119,6 +119,50 @@ func TestAlreadyEnrolledPeerTurningOnAPasswordIsRecoverable(t *testing.T) {
 	}
 }
 
+// TestPeerVerifierNeverReachesTheBrowser guards against the credential
+// this server uses to log in to a peer (see peer_auth.go) leaking into
+// a response the browser can read — it authorizes against that peer the
+// same way a password would, so exposing it is exposing a credential,
+// not display data.
+func TestPeerVerifierNeverReachesTheBrowser(t *testing.T) {
+	receiverHTTP := newPasswordProtectedReceiver(t)
+	coordinator, err := newServer([]string{t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	coordinator.peers = peers.New(filepath.Join(t.TempDir(), "peers.json"))
+
+	add := httptest.NewRequest(http.MethodPost, "/api/peers", strings.NewReader(`{"url":"`+receiverHTTP.URL+`","password":"receiver-secret"}`))
+	addW := httptest.NewRecorder()
+	coordinator.routes().ServeHTTP(addW, add)
+	if addW.Code != http.StatusCreated {
+		t.Fatalf("enroll: got %d %s", addW.Code, addW.Body.String())
+	}
+	if strings.Contains(addW.Body.String(), "verifier") {
+		t.Fatalf("POST /api/peers response leaked a verifier: %s", addW.Body.String())
+	}
+
+	// The persisted record still has one — redaction is only ever applied
+	// to the browser-facing response, never to disk.
+	stored, err := coordinator.peers.List()
+	if err != nil || len(stored) != 1 || stored[0].Verifier == "" {
+		t.Fatalf("verifier should still be persisted server-side: %#v err=%v", stored, err)
+	}
+
+	listW := httptest.NewRecorder()
+	coordinator.routes().ServeHTTP(listW, httptest.NewRequest(http.MethodGet, "/api/peers", nil))
+	if strings.Contains(listW.Body.String(), "verifier") {
+		t.Fatalf("GET /api/peers response leaked a verifier: %s", listW.Body.String())
+	}
+
+	credential := httptest.NewRequest(http.MethodPost, "/api/peers/credential", strings.NewReader(`{"url":"`+receiverHTTP.URL+`","password":"receiver-secret"}`))
+	credW := httptest.NewRecorder()
+	coordinator.routes().ServeHTTP(credW, credential)
+	if strings.Contains(credW.Body.String(), "verifier") {
+		t.Fatalf("POST /api/peers/credential response leaked a verifier: %s", credW.Body.String())
+	}
+}
+
 func hmacProof(verifier []byte, challenge string) string {
 	mac := hmac.New(sha256.New, verifier)
 	_, _ = mac.Write([]byte(challenge))

@@ -1563,6 +1563,25 @@ func (s *server) proxyCachedPeerRange(w http.ResponseWriter, r *http.Request, pe
 	return true
 }
 
+// redactPeer strips Verifier before a peer record crosses into a browser
+// response. It is this server's own credential for logging in to that
+// peer on the browser's behalf (see peer_auth.go) — a bearer-equivalent
+// secret, not display data — and the browser has no legitimate use for
+// it. It is fine at rest in peers.json (same trust level as an access
+// password hash) and fine over the wire between this server and that
+// peer; it should never reach further than that.
+func redactPeer(peer peers.Peer) peers.Peer {
+	peer.Verifier = ""
+	return peer
+}
+func redactPeers(items []peers.Peer) []peers.Peer {
+	redacted := make([]peers.Peer, len(items))
+	for i, item := range items {
+		redacted[i] = redactPeer(item)
+	}
+	return redacted
+}
+
 func (s *server) handlePeers(w http.ResponseWriter, r *http.Request) {
 	if s.peers == nil {
 		writeError(w, errors.New("peer inventory is unavailable"))
@@ -1582,7 +1601,7 @@ func (s *server) handlePeers(w http.ResponseWriter, r *http.Request) {
 			items = refreshed
 		}
 	}
-	writeJSON(w, http.StatusOK, items)
+	writeJSON(w, http.StatusOK, redactPeers(items))
 }
 
 // A peer's name, colour and glyph are copied into the inventory when it
@@ -1651,7 +1670,7 @@ func (s *server) handlePeerAdd(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusCreated, peer)
+	writeJSON(w, http.StatusCreated, redactPeer(peer))
 }
 
 // authenticateToPeer checks whether peer needs a password and, if a
@@ -1750,7 +1769,7 @@ func (s *server) handlePeerCredential(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, peer)
+	writeJSON(w, http.StatusOK, redactPeer(peer))
 }
 
 type peerIdentity struct {
