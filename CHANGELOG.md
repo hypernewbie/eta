@@ -27,6 +27,13 @@ UTC. There is no tagged release yet — entries accumulate under
   one.
 - Add PC now takes a bare hostname ("minerva") — Eta's own default port
   is filled in automatically unless an explicit scheme was given.
+- Add PC now accepts `.local` (mDNS/Bonjour) hostnames such as
+  `jupiter.local`. Eta resolves them by multicast itself rather than
+  relying on the operating system: RFC 6762 reserves `.local` for mDNS,
+  and Go's resolver does not consult the NSS modules (Avahi) that
+  normally handle it — so a name that `ping` resolves fine would fail
+  inside Eta. Resolution applies to all peer traffic, not just adding
+  it, so a `.local` PC can be browsed and not merely enrolled.
 - Copy/paste a PC list between instances (only URLs travel; a peer's
   stored credential never does).
 - Remove PC from the desktop's own context menu (the endpoint existed
@@ -40,6 +47,11 @@ UTC. There is no tagged release yet — entries accumulate under
 
 ### Fixed
 
+- Unreachable-PC errors are written for a person: they name the address
+  and say what to try, instead of relaying Go's internals ("lookup
+  jupiter.local on 127.0.0.53:53: server misbehaving"). A refused
+  connection, an unknown name, a timeout, and something-that-isn't-Eta
+  are now distinguished, since the fix differs for each.
 - A peer going offline was flipping this server's own header
   "OFFLINE" indicator — wrong, since that indicator means this
   instance's own health, not a peer's. A peer window that fails to

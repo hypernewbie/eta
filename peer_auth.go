@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/hypernewbie/eta/internal/access"
+	"github.com/hypernewbie/eta/internal/mdns"
 	"github.com/hypernewbie/eta/internal/peers"
 )
 
@@ -119,7 +120,7 @@ func (s *server) peerTransport(peerURL, verifierB64 string) http.RoundTripper {
 		}
 	}
 	return &peerAuthTransport{
-		base:     http.DefaultTransport,
+		base:     peerBaseTransport(),
 		peerURL:  strings.TrimSuffix(peerURL, "/"),
 		verifier: verifier,
 		cache:    s.peerSessions,
@@ -283,3 +284,15 @@ func peerLogin(ctx context.Context, peerURL string, verifier []byte) (string, er
 	}
 	return "", errors.New("peer did not issue a session")
 }
+
+// peerBaseTransport is the transport under every server-to-server call.
+// It differs from http.DefaultTransport in one way: it can dial a .local
+// peer, which Go's own resolver cannot (see internal/mdns).
+//
+// Shared, because a transport per request would discard connection
+// pooling and start a fresh handshake for every file listing.
+var peerBaseTransport = sync.OnceValue(func() http.RoundTripper {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.DialContext = mdns.DialContext
+	return transport
+})

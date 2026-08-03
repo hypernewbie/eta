@@ -1905,7 +1905,7 @@ func (s *server) handlePeerAdd(w http.ResponseWriter, r *http.Request) {
 	peer.Verifier = ""
 	identity, err := probePeer(r.Context(), peer.URL)
 	if err != nil {
-		writeError(w, fmt.Errorf("probe peer identity: %w", err))
+		writeError(w, explainPeerProbe(peer.URL, err))
 		return
 	}
 	peer.ID, peer.Name, peer.Accent, peer.Glyph = identity.ID, identity.Hostname, identity.Accent, identity.Glyph
@@ -2034,26 +2034,110 @@ type peerIdentity struct {
 	Glyph    string `json:"glyph"`
 }
 
+// explainPeerProbe turns a failed probe into something a person can act
+// on. Go's own error is accurate and useless here: a user adding a PC by
+// address is told about 127.0.0.53:53 and a misbehaving server, neither
+// of which is theirs, while the actual diagnosis is not stated anywhere.
+//
+// Each branch says what happened and what to try, because at this point
+// the user has typed an address and has no other information.
+func explainPeerProbe(rawURL string, err error) error {
+	host := rawURL
+	port := ""
+	if parsed, parseErr := url.Parse(rawURL); parseErr == nil && parsed.Host != "" {
+		host = parsed.Hostname()
+		port = parsed.Port()
+	}
+	where := host
+	if port != "" {
+		where = host + ":" + port
+	}
+
+	var dnsErr *net.DNSError
+	if errors.As(err, &dnsErr) {
+		// .local is reserved for mDNS by RFC 6762, so ordinary DNS servers
+		// answer it with a refusal or nothing -- which is what Go reports
+		// as "server misbehaving". The resolver is not broken and neither
+		// is the peer: this computer just isn't doing mDNS. Naming that is
+		// the difference between an unactionable error and a fix.
+		if strings.HasSuffix(strings.ToLower(strings.TrimSuffix(host, ".")), ".local") {
+			return newAPIError(http.StatusBadRequest, fmt.Sprintf(
+				"Can't look up %q. Names ending in .local are resolved by mDNS, "+
+					"which this computer isn't set up for. Use that PC's IP address "+
+					"instead, or its plain hostname if your network's DNS knows it.", host))
+		}
+		if dnsErr.IsNotFound {
+			return newAPIError(http.StatusBadRequest, fmt.Sprintf(
+				"No computer named %q could be found. Check the spelling, or use its IP address.", host))
+		}
+		return newAPIError(http.StatusBadRequest, fmt.Sprintf(
+			"Couldn't look up %q: this computer's DNS didn't answer. Try its IP address instead.", host))
+	}
+	if errors.Is(err, syscall.ECONNREFUSED) {
+		return newAPIError(http.StatusBadRequest, fmt.Sprintf(
+			"%s refused the connection. Eta doesn't appear to be running there%s.",
+			host, portHint(port)))
+	}
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, os.ErrDeadlineExceeded) {
+		return newAPIError(http.StatusBadRequest, fmt.Sprintf(
+			"%s didn't respond in time. It may be off, or a firewall may be blocking it.", where))
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		return newAPIError(http.StatusBadRequest, fmt.Sprintf(
+			"%s didn't respond in time. It may be off, or a firewall may be blocking it.", where))
+	}
+	if errors.Is(err, syscall.EHOSTUNREACH) || errors.Is(err, syscall.ENETUNREACH) {
+		return newAPIError(http.StatusBadRequest, fmt.Sprintf(
+			"%s can't be reached from this computer. Check they're on the same network or VPN.", host))
+	}
+	// Something answered but wasn't Eta: a different service on that port,
+	// or the right machine on the wrong one. Worth separating from "not
+	// reachable", since the fix is completely different.
+	var identityErr *peerNotEtaError
+	if errors.As(err, &identityErr) {
+		return newAPIError(http.StatusBadRequest, fmt.Sprintf(
+			"Something is running at %s, but it isn't Eta (%s). Check the port.",
+			where, identityErr.detail))
+	}
+	return newAPIError(http.StatusBadRequest, fmt.Sprintf("Couldn't reach %s: %v", where, err))
+}
+
+func portHint(port string) string {
+	if port == "" {
+		return ""
+	}
+	return " on port " + port
+}
+
+// peerNotEtaError marks a reachable address that answered with something
+// other than an Eta identity.
+type peerNotEtaError struct{ detail string }
+
+func (e *peerNotEtaError) Error() string { return e.detail }
+
 func probePeer(ctx context.Context, rawURL string) (peerIdentity, error) {
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimSuffix(rawURL, "/")+"/api/identity", nil)
 	if err != nil {
 		return peerIdentity{}, err
 	}
-	client := &http.Client{Timeout: 5 * time.Second}
+	// Same transport as every other peer call, so a .local address that
+	// can be added is also one that can be browsed.
+	client := &http.Client{Timeout: 5 * time.Second, Transport: peerBaseTransport()}
 	response, err := client.Do(request)
 	if err != nil {
 		return peerIdentity{}, err
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
-		return peerIdentity{}, fmt.Errorf("%s", response.Status)
+		return peerIdentity{}, &peerNotEtaError{detail: "it answered " + response.Status}
 	}
 	var identity peerIdentity
 	if err := json.NewDecoder(response.Body).Decode(&identity); err != nil {
-		return peerIdentity{}, err
+		return peerIdentity{}, &peerNotEtaError{detail: "its reply wasn't Eta's"}
 	}
 	if identity.ID == "" || identity.Hostname == "" || identity.Accent == "" || identity.Glyph == "" {
-		return peerIdentity{}, errors.New("incomplete identity")
+		return peerIdentity{}, &peerNotEtaError{detail: "its reply was missing identity fields"}
 	}
 	return identity, nil
 }

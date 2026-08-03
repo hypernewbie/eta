@@ -4,24 +4,29 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/hypernewbie/eta/internal/diskcache"
+	"github.com/hypernewbie/eta/internal/mdns"
 	"github.com/hypernewbie/eta/internal/peers"
 	"github.com/hypernewbie/eta/internal/roots"
 	"github.com/hypernewbie/eta/internal/terminal"
 	"github.com/hypernewbie/eta/internal/tmux"
 	"github.com/hypernewbie/eta/internal/transfer"
 	"github.com/hypernewbie/eta/internal/uistate"
+	dnsmsg "github.com/miekg/dns"
 )
 
 func TestMediaTypes(t *testing.T) {
@@ -1003,4 +1008,212 @@ func TestRootManagementUnavailableWithoutAStore(t *testing.T) {
 	if removeW.Code == http.StatusOK {
 		t.Fatal("root remove succeeded without a rootsStore")
 	}
+}
+
+// The error a user actually saw:
+//
+//	probe peer identity: Get "http://jupiter.local:7080/api/identity":
+//	dial tcp: lookup jupiter.local on 127.0.0.53:53: server misbehaving
+//
+// Every fact in that sentence is either internal (the probe endpoint),
+// not theirs (the stub resolver's address), or wrong as a diagnosis (the
+// server is not misbehaving). .local is reserved for mDNS by RFC 6762,
+// so an ordinary DNS server is expected to refuse it -- which is exactly
+// what happened, and is fixable once said.
+func TestExplainPeerProbeDiagnosesAnMDNSName(t *testing.T) {
+	// The real wrapped chain: http.Client wraps *url.Error around the
+	// dialer's *net.OpError around the resolver's *net.DNSError.
+	err := &url.Error{
+		Op:  "Get",
+		URL: "http://jupiter.local:7080/api/identity",
+		Err: &net.OpError{
+			Op:  "dial",
+			Net: "tcp",
+			Err: &net.DNSError{
+				Err:    "server misbehaving",
+				Name:   "jupiter.local",
+				Server: "127.0.0.53:53",
+			},
+		},
+	}
+	got := explainPeerProbe("http://jupiter.local:7080", err).Error()
+
+	if !strings.Contains(got, "mDNS") {
+		t.Errorf("the diagnosis should name mDNS, since that is the actual cause; got: %s", got)
+	}
+	if !strings.Contains(got, "IP address") {
+		t.Errorf("should say what to try instead; got: %s", got)
+	}
+	if !strings.Contains(got, "jupiter.local") {
+		t.Errorf("should name the host the user typed; got: %s", got)
+	}
+	// None of Go's plumbing should survive into what the user reads.
+	for _, leak := range []string{"127.0.0.53", "server misbehaving", "/api/identity", "dial tcp", "probe peer identity"} {
+		if strings.Contains(got, leak) {
+			t.Errorf("internal detail %q leaked into the message: %s", leak, got)
+		}
+	}
+}
+
+// A name that genuinely does not exist is a different problem from a
+// .local one, and gets a different instruction.
+func TestExplainPeerProbeReportsAnUnknownName(t *testing.T) {
+	err := &url.Error{Op: "Get", Err: &net.OpError{Op: "dial", Err: &net.DNSError{
+		Err: "no such host", Name: "nosuchpc", IsNotFound: true,
+	}}}
+	got := explainPeerProbe("http://nosuchpc:7080", err).Error()
+	if !strings.Contains(got, "nosuchpc") || !strings.Contains(got, "spelling") {
+		t.Errorf("expected a name-not-found message naming the host; got: %s", got)
+	}
+	if strings.Contains(got, "mDNS") {
+		t.Errorf("mDNS is irrelevant to an ordinary hostname; got: %s", got)
+	}
+}
+
+// A real refusal from a real closed port, rather than a hand-built error,
+// so this stays true to whatever the platform actually returns.
+func TestExplainPeerProbeReportsARefusedConnection(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	closedURL := "http://" + listener.Addr().String()
+	port := strconv.Itoa(listener.Addr().(*net.TCPAddr).Port)
+	listener.Close()
+
+	_, probeErr := probePeer(context.Background(), closedURL)
+	if probeErr == nil {
+		t.Fatal("expected the probe to fail against a closed port")
+	}
+	got := explainPeerProbe(closedURL, probeErr).Error()
+	if !strings.Contains(got, "Eta doesn't appear to be running") {
+		t.Errorf("a refusal means nothing is listening, and should say so; got: %s", got)
+	}
+	if !strings.Contains(got, port) {
+		t.Errorf("should name the port that refused; got: %s", got)
+	}
+	if strings.Contains(got, "connect: connection refused") {
+		t.Errorf("raw syscall wording leaked: %s", got)
+	}
+}
+
+// Reachable but not Eta is worth separating from unreachable: the address
+// is fine and the fix is a different port, not a different machine.
+func TestExplainPeerProbeSeparatesReachableButNotEta(t *testing.T) {
+	notEta := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.NotFound(w, r)
+	}))
+	defer notEta.Close()
+
+	_, probeErr := probePeer(context.Background(), notEta.URL)
+	if probeErr == nil {
+		t.Fatal("expected a probe against a non-Eta server to fail")
+	}
+	got := explainPeerProbe(notEta.URL, probeErr).Error()
+	if !strings.Contains(got, "isn't Eta") || !strings.Contains(got, "Check the port") {
+		t.Errorf("expected a reachable-but-wrong-service message; got: %s", got)
+	}
+
+	// Eta's own endpoint answering with something else is the same class
+	// of problem, and must not read as a network failure.
+	wrongShape := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `{"hostname":"x"}`)
+	}))
+	defer wrongShape.Close()
+	_, probeErr = probePeer(context.Background(), wrongShape.URL)
+	if probeErr == nil {
+		t.Fatal("expected an incomplete identity to fail")
+	}
+	if got := explainPeerProbe(wrongShape.URL, probeErr).Error(); !strings.Contains(got, "isn't Eta") {
+		t.Errorf("an incomplete identity is still 'not Eta'; got: %s", got)
+	}
+}
+
+// Unreachable addresses must not read as a server fault of ours: the
+// address the user typed is the thing at issue.
+func TestExplainPeerProbeIsABadRequestNotAServerError(t *testing.T) {
+	err := explainPeerProbe("http://jupiter.local:7080", &net.DNSError{Err: "server misbehaving", Name: "jupiter.local"})
+	var apiErr *apiError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("expected an apiError carrying a status, got %T", err)
+	}
+	if apiErr.status != http.StatusBadRequest {
+		t.Errorf("expected 400 for an address that doesn't work, got %d", apiErr.status)
+	}
+}
+
+// The reported failure, end to end: a user types a .local hostname and
+// adding the PC fails, because Go's resolver will not resolve a name
+// that RFC 6762 defines as multicast-only.
+//
+// Here a real responder advertises the name (as the peer's own Avahi or
+// Bonjour would) pointing at a real Eta identity endpoint, and the probe
+// must succeed through the ordinary peer transport.
+func TestProbePeerResolvesADotLocalHostname(t *testing.T) {
+	identity := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/identity" {
+			http.NotFound(w, r)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]string{
+			"id": "abc", "hostname": "JUPITER", "accent": "#8b5cf6", "glyph": "J",
+		})
+	}))
+	defer identity.Close()
+
+	port := identity.URL[strings.LastIndex(identity.URL, ":")+1:]
+	stop := startTestMDNSResponder(t, "jupiter.local.", "127.0.0.1")
+	defer stop()
+	mdns.Forget("jupiter.local")
+
+	got, err := probePeer(context.Background(), "http://jupiter.local:"+port)
+	if err != nil {
+		t.Fatalf("a .local peer must be reachable by name: %v", err)
+	}
+	if got.Hostname != "JUPITER" {
+		t.Errorf("expected the peer's identity, got %+v", got)
+	}
+}
+
+// startTestMDNSResponder answers A queries for one .local name, standing
+// in for the Avahi or Bonjour responder on a real peer.
+func startTestMDNSResponder(t *testing.T, fqdn, ip string) func() {
+	t.Helper()
+	conn, err := net.ListenMulticastUDP("udp4", nil, &net.UDPAddr{IP: net.ParseIP("224.0.0.251"), Port: 5353})
+	if err != nil {
+		t.Skipf("cannot listen on the mDNS group here: %v", err)
+	}
+	done := make(chan struct{})
+	go func() {
+		buf := make([]byte, 9000)
+		for {
+			select {
+			case <-done:
+				return
+			default:
+			}
+			_ = conn.SetReadDeadline(time.Now().Add(200 * time.Millisecond))
+			n, src, err := conn.ReadFromUDP(buf)
+			if err != nil {
+				continue
+			}
+			msg := new(dnsmsg.Msg)
+			if msg.Unpack(buf[:n]) != nil || len(msg.Question) == 0 {
+				continue
+			}
+			if !strings.EqualFold(msg.Question[0].Name, fqdn) || msg.Question[0].Qtype != dnsmsg.TypeA {
+				continue
+			}
+			reply := new(dnsmsg.Msg)
+			reply.SetReply(msg)
+			reply.Answer = []dnsmsg.RR{&dnsmsg.A{
+				Hdr: dnsmsg.RR_Header{Name: fqdn, Rrtype: dnsmsg.TypeA, Class: dnsmsg.ClassINET, Ttl: 120},
+				A:   net.ParseIP(ip),
+			}}
+			if wire, err := reply.Pack(); err == nil {
+				_, _ = conn.WriteToUDP(wire, src)
+			}
+		}
+	}()
+	return func() { close(done); conn.Close() }
 }
