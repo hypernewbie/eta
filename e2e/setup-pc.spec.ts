@@ -14,7 +14,7 @@ test("the setup dialog opens from the header and sends the typed destination", a
 }) => {
   await page.goto("/");
 
-  const dialog = page.locator("#setup-pc-dialog");
+  const dialog = page.locator(".winbox.identity-window");
   await expect(dialog).not.toBeVisible();
 
   await page.locator("#setup-pc-button").click();
@@ -22,7 +22,7 @@ test("the setup dialog opens from the header and sends the typed destination", a
 
   // Progress is hidden until something is actually running: an idle
   // dialog claiming a phase would be lying.
-  await expect(page.locator("#setup-pc-progress")).not.toBeVisible();
+  await expect(page.locator(".setup-pc-progress")).not.toBeVisible();
 
   const posted: string[] = [];
   await page.route("**/api/remote-pc", async (route) => {
@@ -46,15 +46,15 @@ test("the setup dialog opens from the header and sends the typed destination", a
     }),
   );
 
-  await page.locator("#setup-pc-destination").fill("minerva");
-  await page.locator("#setup-pc-start").click();
+  await page.locator(".setup-pc-destination").fill("minerva");
+  await page.locator(".setup-pc-start").click();
 
   await expect.poll(() => posted.length).toBeGreaterThan(0);
   expect(JSON.parse(posted[0])).toEqual({ destination: "minerva" });
 
   // The phase is shown in words, not the server's own terse token.
-  await expect(page.locator("#setup-pc-progress")).toBeVisible();
-  await expect(page.locator("#setup-pc-phase-text")).toContainText(
+  await expect(page.locator(".setup-pc-progress")).toBeVisible();
+  await expect(page.locator(".setup-pc-phase-text")).toContainText(
     /installing eta/i,
   );
 });
@@ -89,23 +89,23 @@ test("a failed setup shows the reason and the remote's own output", async ({
   );
 
   await page.locator("#setup-pc-button").click();
-  await page.locator("#setup-pc-destination").fill("minerva");
-  await page.locator("#setup-pc-start").click();
+  await page.locator(".setup-pc-destination").fill("minerva");
+  await page.locator(".setup-pc-start").click();
 
   // The specific reason, not a generic failure: this is the difference
   // between a user installing Go and a user filing a bug.
-  await expect(page.locator("#setup-pc-phase-text")).toContainText(
+  await expect(page.locator(".setup-pc-phase-text")).toContainText(
     "no Go toolchain found on this PC",
   );
   // The remote's own output appears only on failure.
-  await expect(page.locator("#setup-pc-output")).toBeVisible();
-  await expect(page.locator("#setup-pc-output")).toContainText(
+  await expect(page.locator(".setup-pc-output")).toBeVisible();
+  await expect(page.locator(".setup-pc-output")).toContainText(
     "no Go toolchain found",
   );
 
   // Recoverable: the form is usable again rather than stuck disabled.
-  await expect(page.locator("#setup-pc-start")).toBeEnabled();
-  await expect(page.locator("#setup-pc-destination")).toBeEnabled();
+  await expect(page.locator(".setup-pc-start")).toBeEnabled();
+  await expect(page.locator(".setup-pc-destination")).toBeEnabled();
 });
 
 test("a rejected destination is reported without starting anything", async ({
@@ -116,16 +116,16 @@ test("a rejected destination is reported without starting anything", async ({
 
   // The real server answers this one: a destination ssh would read as an
   // option is refused at the edge, so no session ever starts.
-  await page.locator("#setup-pc-destination").fill("-oProxyCommand=whoami");
-  await page.locator("#setup-pc-start").click();
+  await page.locator(".setup-pc-destination").fill("-oProxyCommand=whoami");
+  await page.locator(".setup-pc-start").click();
 
   // The server's own reason reaches the user, not a generic
   // "Request failed (400)" -- which is what this showed before the
   // handlers were switched to the project's JSON error convention.
-  await expect(page.locator("#setup-pc-phase-text")).toContainText(
+  await expect(page.locator(".setup-pc-phase-text")).toContainText(
     /ssh would read/i,
   );
-  await expect(page.locator("#setup-pc-start")).toBeEnabled();
+  await expect(page.locator(".setup-pc-start")).toBeEnabled();
 });
 
 // The SSH actions must appear only for a PC that is actually SSH-backed.

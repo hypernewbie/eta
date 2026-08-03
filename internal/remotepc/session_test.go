@@ -728,3 +728,30 @@ func TestLastFailureMemoSurvivesAPreSessionErrorAndClearsOnRetry(t *testing.T) {
 		t.Fatal("a retry must clear the memoized failure from the previous attempt")
 	}
 }
+
+func TestRemoteCommandGitClone(t *testing.T) {
+	repoURL := "https://github.com/hypernewbie/eta.git"
+	for _, sh := range []shell{shellPOSIX, shellPowerShell} {
+		cmd := remoteCommand(sh, "m", "v1", "", repoURL, 7080)
+		for _, want := range []string{"git clone --depth 1", "git fetch --depth 1", "go build"} {
+			if !strings.Contains(cmd, want) {
+				t.Errorf("shell %v: expected %q in git command, got:\n%s", sh, want, cmd)
+			}
+		}
+		if strings.Contains(cmd, "go install") {
+			t.Errorf("shell %v: git clone path should not call go install, got:\n%s", sh, cmd)
+		}
+	}
+}
+
+func TestRemoteCommandFallbackGoInstall(t *testing.T) {
+	for _, sh := range []shell{shellPOSIX, shellPowerShell} {
+		cmd := remoteCommand(sh, "m", "v1", "", "", 7080)
+		if !strings.Contains(cmd, "go install") {
+			t.Errorf("shell %v: empty repoURL should fall back to go install, got:\n%s", sh, cmd)
+		}
+		if strings.Contains(cmd, "git clone") {
+			t.Errorf("shell %v: fallback path should not call git clone, got:\n%s", sh, cmd)
+		}
+	}
+}
