@@ -329,6 +329,12 @@ func remoteCommand(sh shell, module, version, accessHash string, remotePort int)
 			etaCommand += ` --access-file ` + accessFile
 		}
 		return strings.Join([]string{
+			// Non-interactive SSH shells on macOS don't source .zshrc
+			// and may not source .zprofile either, so PATH doesn't
+			// include where Homebrew / the Go installer put `go`.
+			// Common locations: Apple Silicon Homebrew, official Go
+			// installer, Intel Homebrew, user GOPATH bin, gvm/asdf.
+			`export PATH="/opt/homebrew/bin:/usr/local/go/bin:/usr/local/bin:$HOME/go/bin:$HOME/sdk/go/bin:$PATH"`,
 			`command -v go >/dev/null 2>&1 || { echo "ETA:fail:no Go toolchain found on this PC (install Go, or make sure it is on the PATH for non-interactive SSH sessions)"; exit 1; }`,
 			`GOPATH="$HOME/.eta"; export GOPATH`,
 			`GOCACHE="$GOPATH/build-cache"; export GOCACHE`,

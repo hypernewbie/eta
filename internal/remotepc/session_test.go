@@ -135,6 +135,19 @@ func TestRemoteCommandContainsEverythingUnderDotEta(t *testing.T) {
 	}
 }
 
+// TestRemoteCommandPutsGoOnPath: macOS non-interactive SSH shells don't
+// source .zshrc and may not source .zprofile, so PATH doesn't include
+// where Homebrew / the Go installer put `go`. The install script has to
+// add the common locations before the command -v check.
+func TestRemoteCommandPutsGoOnPath(t *testing.T) {
+	posix := remoteCommand(shellPOSIX, "github.com/hypernewbie/eta", "v1.2.3", "", 9999)
+	for _, p := range []string{"/opt/homebrew/bin", "/usr/local/go/bin", "/usr/local/bin"} {
+		if !strings.Contains(posix, p) {
+			t.Errorf("posix install script must put %s on PATH for macOS SSH sessions; missing from:\n%s", p, posix)
+		}
+	}
+}
+
 // TestRemoteCommandSetsModcacherw: go marks module cache files read-only,
 // so without this a recursive remove of ~/.eta fails partway through.
 func TestRemoteCommandSetsModcacherw(t *testing.T) {
