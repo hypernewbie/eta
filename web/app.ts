@@ -4367,10 +4367,15 @@ async function refreshSettingsAccessState() {
   $("#settings-access-confirm-remove").hidden = true;
 }
 let settingsVersionLoaded = false;
+function settingsRootsAPIPath(): string {
+  if (activeSettingsMachineKey === "local") return "/api/roots";
+  return `/api/remote/roots?peer=${encodeURIComponent(activeSettingsMachineKey)}`;
+}
+
 async function refreshSettingsRootsList() {
   const list = $("#settings-roots-list");
   try {
-    const items: Root[] = await api("/api/roots");
+    const items: Root[] = await api(settingsRootsAPIPath());
     list.innerHTML = items
       .map(
         (root) =>
@@ -4389,29 +4394,40 @@ $("#settings-roots-list").addEventListener("click", async (event) => {
   if (!button) return;
   button.disabled = true;
   try {
-    await api(`/api/roots?id=${button.dataset.removeRoot}`, {
+    const basePath = settingsRootsAPIPath();
+    const sep = basePath.includes("?") ? "&" : "?";
+    await api(`${basePath}${sep}id=${button.dataset.removeRoot}`, {
       method: "DELETE",
     });
     await refreshSettingsRootsList();
     await refreshAllExplorerRoots();
+    void renderDesktopIcons();
   } catch (error) {
     showToast((error as Error).message);
     button.disabled = false;
   }
 });
 $("#settings-root-add").addEventListener("click", async () => {
+  const isLocal = activeSettingsMachineKey === "local";
+  const peer = isLocal
+    ? null
+    : enrolledPeers.find((p) => p.url === activeSettingsMachineKey);
+  const machineName = isLocal
+    ? "this machine"
+    : peerDisplayName(peer).toUpperCase();
   const path = window.prompt(
-    "Directory to expose (an absolute path on this machine):",
+    `Directory to expose (an absolute path on ${machineName}):`,
   );
   if (!path) return;
   try {
-    await api("/api/roots", {
+    await api(settingsRootsAPIPath(), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ path }),
     });
     await refreshSettingsRootsList();
     await refreshAllExplorerRoots();
+    void renderDesktopIcons();
   } catch (error) {
     showToast((error as Error).message);
   }
@@ -4521,6 +4537,7 @@ function renderSettingsForSelectedMachine() {
   const peerSec = $("#settings-peer-sections");
   if (localSec) localSec.hidden = !isLocal;
   if (peerSec) peerSec.hidden = isLocal;
+  void refreshSettingsRootsList();
 
   if (!isLocal) {
     const peer = enrolledPeers.find((p) => p.url === activeSettingsMachineKey);

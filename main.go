@@ -557,6 +557,8 @@ func (s *server) routes() http.Handler {
 	mux.HandleFunc("POST /api/transfer-trees/{id}/commit", s.handleTransferTreeCommit)
 	mux.HandleFunc("DELETE /api/transfer-trees/{id}", s.handleTransferTreeAbort)
 	mux.HandleFunc("GET /api/remote/roots", s.handleRemoteRoots)
+	mux.HandleFunc("POST /api/remote/roots", s.handleRemoteRoots)
+	mux.HandleFunc("DELETE /api/remote/roots", s.handleRemoteRoots)
 	mux.HandleFunc("GET /api/remote/list", s.handleRemoteList)
 	mux.HandleFunc("GET /api/remote/file", s.handleRemoteFile)
 	mux.HandleFunc("GET /api/remote/preview", s.handleRemotePreview)
@@ -1684,21 +1686,28 @@ func (s *server) proxyPeer(w http.ResponseWriter, r *http.Request, route string)
 	}
 	remoteURL.Path = strings.TrimSuffix(remoteURL.Path, "/") + route
 	query := remoteURL.Query()
-	query.Set("root", r.URL.Query().Get("root"))
-	query.Set("path", r.URL.Query().Get("path"))
-	for _, key := range []string{"size", "download", "embed"} {
-		if value := r.URL.Query().Get(key); value != "" {
-			query.Set(key, value)
+	for k, v := range r.URL.Query() {
+		if k == "peer" {
+			continue
 		}
+		query[k] = v
 	}
 	remoteURL.RawQuery = query.Encode()
-	request, err := http.NewRequestWithContext(r.Context(), http.MethodGet, remoteURL.String(), nil)
-	if rangeHeader := r.Header.Get("Range"); rangeHeader != "" {
-		request.Header.Set("Range", rangeHeader)
+
+	var reqBody io.Reader
+	if r.Body != nil {
+		reqBody = r.Body
 	}
+	request, err := http.NewRequestWithContext(r.Context(), r.Method, remoteURL.String(), reqBody)
 	if err != nil {
 		writeError(w, err)
 		return
+	}
+	if ct := r.Header.Get("Content-Type"); ct != "" {
+		request.Header.Set("Content-Type", ct)
+	}
+	if rangeHeader := r.Header.Get("Range"); rangeHeader != "" {
+		request.Header.Set("Range", rangeHeader)
 	}
 	response, err := s.peerClient(peer, 10*time.Second).Do(request)
 	if err != nil {
