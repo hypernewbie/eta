@@ -36,6 +36,7 @@ import (
 	"github.com/hypernewbie/eta/internal/peers"
 	"github.com/hypernewbie/eta/internal/rangecache"
 	"github.com/hypernewbie/eta/internal/remotefile"
+	"github.com/hypernewbie/eta/internal/remotepc"
 	"github.com/hypernewbie/eta/internal/roots"
 	"github.com/hypernewbie/eta/internal/terminal"
 	"github.com/hypernewbie/eta/internal/tmux"
@@ -98,6 +99,7 @@ type server struct {
 	access       *access.Manager
 	accessPath   string
 	peerSessions *peerSessionCache
+	remotePCs    *remotepc.Manager
 	remoteCache  *diskcache.Cache
 	hotRanges    *rangecache.Cache
 	transfers    *transfer.Store
@@ -367,6 +369,11 @@ func main() {
 		// resume goroutine is mid-tree-commit, leaving the
 		// receiver with a staging tree that nothing will sweep up.
 		s.shutdownCancel()
+		// Every eta this instance started on another PC dies with its
+		// ssh connection anyway, once that connection's stdin closes.
+		// Closing them here makes it prompt and deliberate rather than
+		// leaving remote processes to a server-side timeout.
+		s.remotePCs.StopAll()
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		_ = httpServer.Shutdown(ctx)
@@ -396,6 +403,7 @@ func newServer(paths []string) (*server, error) {
 		transferJobs: transfer.NewJobs(),
 		access:       access.NewManager(),
 		peerSessions: newPeerSessionCache(),
+		remotePCs:    remotepc.NewManager(),
 		shutdown:     ctx,
 	}
 	s.shutdownCancel = cancel
@@ -552,6 +560,10 @@ func (s *server) routes() http.Handler {
 	mux.HandleFunc("GET /api/remote/file", s.handleRemoteFile)
 	mux.HandleFunc("GET /api/remote/preview", s.handleRemotePreview)
 	mux.HandleFunc("GET /api/remote/thumbnail", s.handleRemoteThumbnail)
+	mux.HandleFunc("POST /api/remote-pc", s.handleRemotePCConnect)
+	mux.HandleFunc("GET /api/remote-pc", s.handleRemotePCStatus)
+	mux.HandleFunc("DELETE /api/remote-pc", s.handleRemotePCDisconnect)
+	mux.HandleFunc("POST /api/remote-pc/cleanup", s.handleRemotePCCleanup)
 	mux.HandleFunc("GET /api/peers/auth-status", s.handlePeerAuthStatus)
 	mux.HandleFunc("POST /api/peers", s.handlePeerAdd)
 	mux.HandleFunc("POST /api/peers/credential", s.handlePeerCredential)

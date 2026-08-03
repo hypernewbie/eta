@@ -77,6 +77,7 @@ type Options struct {
 type Session struct {
 	destination string
 	url         string
+	localPort   int
 	cmd         *exec.Cmd
 	stdin       io.Closer
 
@@ -142,6 +143,14 @@ func (s *Session) Stop() {
 
 func (s *Session) Wait() error {
 	<-s.exited
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.err
+}
+
+// Err is why the session failed, or nil. Unlike Wait it does not block,
+// so a status request can report a failure without waiting for one.
+func (s *Session) Err() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.err
@@ -319,9 +328,27 @@ func selfModuleVersion() (module, version string, err error) {
 	return module, version, nil
 }
 
-// Start detects the remote's shell, installs and runs eta there, and
-// waits until it actually answers locally.
+// Start is Begin plus WaitReady: convenient when the caller has nothing
+// to do until the session works.
 func Start(ctx context.Context, opts Options) (*Session, error) {
+	session, err := Begin(ctx, opts)
+	if err != nil {
+		return nil, err
+	}
+	if err := session.WaitReady(ctx); err != nil {
+		session.Stop()
+		return nil, err
+	}
+	return session, nil
+}
+
+// Begin detects the remote's shell and starts installing and running eta
+// there, returning as soon as the ssh process is spawned — before it is
+// ready. Callers reporting progress need the session while it converges:
+// a first connect compiles from source and can take minutes, and a
+// session that only exists once it works cannot be observed getting
+// there.
+func Begin(ctx context.Context, opts Options) (*Session, error) {
 	module, version := opts.Module, opts.Version
 	if module == "" || version == "" {
 		selfModule, selfVersion, err := selfModuleVersion()
@@ -417,10 +444,7 @@ func Start(ctx context.Context, opts Options) (*Session, error) {
 		close(session.exited)
 	}()
 
-	if err := session.awaitReady(ctx, localPort); err != nil {
-		session.Stop()
-		return nil, err
-	}
+	session.localPort = localPort
 	return session, nil
 }
 
@@ -476,15 +500,21 @@ func (s *Session) failure(waitErr error) error {
 	return fmt.Errorf("eta did not start on %s: %s", s.destination, detail)
 }
 
-// awaitReady polls until the forwarded port serves eta. Decided locally,
+// WaitReady polls until the forwarded port serves eta. Decided locally,
 // not by a remote marker or a remote curl: it checks the thing that
 // matters (reachable from here) and the remote needs no HTTP client.
 // Gives up the moment ssh dies rather than waiting out its own timeout.
-func (s *Session) awaitReady(ctx context.Context, localPort int) error {
+//
+// Safe to call more than once, and returns immediately once ready, so
+// several callers can wait on the same converging session.
+func (s *Session) WaitReady(ctx context.Context) error {
+	if s.Phase() == PhaseReady {
+		return nil
+	}
 	ctx, cancel := context.WithTimeout(ctx, establishTimeout)
 	defer cancel()
 
-	url := "http://127.0.0.1:" + strconv.Itoa(localPort) + "/api/healthz"
+	url := "http://127.0.0.1:" + strconv.Itoa(s.localPort) + "/api/healthz"
 	client := &http.Client{Timeout: 3 * time.Second}
 	for {
 		select {
@@ -569,8 +599,9 @@ func (m *Manager) Connect(ctx context.Context, opts Options) (*Session, error) {
 		m.starting[opts.Destination] = done
 		m.mu.Unlock()
 
-		session, err := Start(ctx, opts)
-
+		// Registered as soon as the process exists, not once it works, so
+		// its phase is observable while it converges.
+		session, err := Begin(ctx, opts)
 		m.mu.Lock()
 		delete(m.starting, opts.Destination)
 		if err == nil {
@@ -578,8 +609,42 @@ func (m *Manager) Connect(ctx context.Context, opts Options) (*Session, error) {
 		}
 		m.mu.Unlock()
 		close(done)
-		return session, err
+		if err != nil {
+			return nil, err
+		}
+		if err := session.WaitReady(ctx); err != nil {
+			m.Disconnect(opts.Destination)
+			return nil, err
+		}
+		return session, nil
 	}
+}
+
+// ConnectAsync starts a connection and returns straight away. The caller
+// polls Get for progress. Used by the HTTP layer, where a first connect
+// can take minutes and holding a request open for it is not an option.
+func (m *Manager) ConnectAsync(opts Options) error {
+	if err := validateDestination(opts.Destination); err != nil {
+		return err
+	}
+	if _, live := m.Get(opts.Destination); live {
+		return nil
+	}
+	go func() {
+		// Deliberately not tied to the request's context: the connection
+		// outlives the request that asked for it.
+		_, _ = m.Connect(context.Background(), opts)
+	}()
+	return nil
+}
+
+// Pending reports a session that exists but is not ready yet, so status
+// can distinguish "still working" from "never started".
+func (m *Manager) Pending(destination string) (*Session, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	session, ok := m.sessions[destination]
+	return session, ok
 }
 
 // Get returns the live session for a destination, if any.
