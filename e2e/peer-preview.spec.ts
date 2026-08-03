@@ -52,8 +52,13 @@ test("opening a file in a peer Explorer mounts a peer-accented inspector @peer",
     // The peer's hostname glyph shows in the window title; the inspector
     // itself carries the peer's --window-accent. We assert that the
     // rendered content surface exists and shows the file's text.
+    //
+    // Scoped to the inspector window rather than the page: .markdown-preview
+    // is shared by anything rendering markdown, including the Settings
+    // changelog dialog, which pre-renders hidden in the DOM. A page-wide
+    // .first() matched that instead and saw "hidden".
     await expect(
-      page.locator(".markdown-preview, .preview-text").first(),
+      peerWindows.last().locator(".markdown-preview, .preview-text").first(),
     ).toBeVisible();
 
     // Closing the inspector drops it out of the dock and the peer
