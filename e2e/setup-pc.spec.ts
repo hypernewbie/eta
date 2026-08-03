@@ -14,7 +14,11 @@ test("the setup dialog opens from the header and sends the typed destination", a
 }) => {
   await page.goto("/");
 
-  const dialog = page.locator(".winbox.identity-window");
+  // The setup dialog is a window like any other (WinBox), but it alone
+  // carries the setup-pc-window class -- every window is
+  // eta-window identity-window, so that broad locator would match the
+  // startup Explorer as well.
+  const dialog = page.locator(".winbox.setup-pc-window");
   await expect(dialog).not.toBeVisible();
 
   await page.locator("#setup-pc-button").click();
@@ -252,6 +256,6 @@ test("reconnecting a saved PC sends its SSH destination", async ({ page }) => {
   await expect.poll(() => posted.length).toBeGreaterThan(0);
   expect(JSON.parse(posted[0])).toEqual({ destination: "pi@minerva" });
   // The dialog opens already showing progress, prefilled and locked.
-  await expect(page.locator("#setup-pc-dialog")).toBeVisible();
-  await expect(page.locator("#setup-pc-destination")).toHaveValue("pi@minerva");
+  await expect(page.locator(".winbox.setup-pc-window")).toBeVisible();
+  await expect(page.locator(".setup-pc-destination")).toHaveValue("pi@minerva");
 });

@@ -3144,6 +3144,7 @@ let lastCalendarMonthStr = "";
 function initDesktopWidgets() {
     if (desktopWidgetsTimer)
         return;
+    iconify();
     void updateDesktopWidgets();
     desktopWidgetsTimer = window.setInterval(() => {
         void updateDesktopWidgets();
@@ -3851,7 +3852,10 @@ function createSetupPCWindow(initialDestination = "", position) {
     const instance = new WinBox({
         title,
         mount: panel,
-        class: "eta-window identity-window",
+        // setup-pc-window: the one stable attribute this window owns.
+        // Every window carries eta-window identity-window, so tests and
+        // code that must address *this* dialog target the unique class.
+        class: "eta-window identity-window setup-pc-window",
         x: position ? position.x : "center",
         y: position ? position.y : 80,
         width: Math.min(540, Math.floor(window.innerWidth * 0.9)),

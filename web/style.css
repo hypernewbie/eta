@@ -2013,7 +2013,7 @@ body.windowed {
   display: flex;
   flex-direction: column;
   gap: 12px;
-  pointer-events: auto;
+  pointer-events: none;
 }
 .desktop-widgets[hidden] {
   display: none !important;
@@ -2027,6 +2027,7 @@ body.windowed {
   padding: 14px;
   color: var(--text-primary);
   box-shadow: 0 4px 20px rgba(0, 0, 0, 0.35);
+  pointer-events: auto;
 }
 .widget-clock {
   display: flex;
@@ -2089,6 +2090,7 @@ body.windowed {
   color: var(--text-muted);
   margin-bottom: 10px;
 }
+.widget-header i,
 .widget-header svg {
   width: 14px;
   height: 14px;
@@ -2111,6 +2113,7 @@ body.windowed {
   gap: 4px;
   color: var(--text-muted);
 }
+.net-stat-label i,
 .net-stat-label svg {
   width: 12px;
   height: 12px;
