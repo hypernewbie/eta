@@ -2640,6 +2640,19 @@ function openShortcut(shortcut, peer) {
         peer: shortcut.peer,
     });
 }
+// One description of a desktop icon, so every kind gets the same
+// accent, art, label, open behaviour and context menu without a
+// parallel branch per kind. Adding a kind means adding an entry to
+// desktopIconModel(), not another markup string plus another arm in
+// openDesktopIcon() plus another rule in the menu — which is how the
+// peer icons ended up painted in the local machine's accent while the
+// windows they opened were painted correctly.
+const peerConnectionStatus = new Map();
+function isPeerOnline(peer) {
+    if (!peer)
+        return true;
+    return peerConnectionStatus.get(peer.url) !== "offline";
+}
 let desktopIconIndex = new Map();
 let renderedDesktopIcons = "";
 function desktopIconModel(roots) {
@@ -2653,17 +2666,25 @@ function desktopIconModel(roots) {
         art: { glyph: localHost.glyph },
         open: () => void openExplorerWindow(),
         removable: false,
+        online: true,
     });
     for (const peer of enrolledPeers) {
         const label = peerDisplayName(peer).toUpperCase();
+        const online = isPeerOnline(peer);
+        const title = online
+            ? `${label} (Connected)`
+            : peer.ssh_destination
+                ? `${label} (Disconnected — Double-click to reconnect)`
+                : `${label} (Disconnected)`;
         icons.push({
             id: `computer:${peer.url}`,
             label,
-            title: label,
+            title,
             peer,
             art: { glyph: peerDisplayGlyph(peer) },
             open: () => void openExplorerWindow(undefined, peer),
             removable: false,
+            online,
         });
     }
     icons.push({
@@ -2720,9 +2741,13 @@ function desktopIconMarkup(icon) {
         ? escapeHTML(icon.art.glyph)
         : `<i data-lucide="${escapeHTML(icon.art.lucide)}"></i>`;
     const glyph = "glyph" in icon.art ? " desktop-icon-glyph" : "";
-    return (`<button type="button" class="desktop-icon" data-desktop-icon="${escapeHTML(icon.id)}"` +
+    const offlineClass = icon.online === false && icon.peer ? " desktop-icon-offline" : "";
+    const statusBadge = icon.peer && icon.online !== undefined
+        ? `<span class="desktop-status-dot${icon.online ? "" : " offline"}"></span>`
+        : "";
+    return (`<button type="button" class="desktop-icon${offlineClass}" data-desktop-icon="${escapeHTML(icon.id)}"` +
         ` style="--icon-accent:${escapeHTML(windowAccent(icon.peer))}" title="${escapeHTML(icon.title)}">` +
-        `<span class="desktop-icon-art${glyph}">${art}</span>` +
+        `<span class="desktop-icon-art${glyph}">${art}${statusBadge}</span>` +
         `<span class="desktop-icon-label">${escapeHTML(icon.label)}</span></button>`);
 }
 // A PC can be renamed or recoloured after it was enrolled, and the
@@ -3101,6 +3126,10 @@ async function renderDesktopIcons() {
 }
 function openDesktopIcon(element) {
     const icon = desktopIconIndex.get(element.dataset.desktopIcon || "");
+    if (icon?.peer && !isPeerOnline(icon.peer) && icon.peer.ssh_destination) {
+        createSetupPCWindow(icon.peer.ssh_destination);
+        return;
+    }
     icon?.open();
 }
 $("#desktop-icons").addEventListener("click", (event) => {
@@ -3734,10 +3763,12 @@ function createSetupPCWindow(initialDestination = "", position) {
                 if (status.phase === "ready") {
                     spinner.hidden = true;
                     enrolledPeers = await api("/api/peers");
-                    void renderDesktopIcons();
                     const peer = enrolledPeers.find((p) => p.ssh_destination === destination || p.url === status.url);
-                    if (peer)
+                    if (peer) {
+                        peerConnectionStatus.set(peer.url, "online");
                         void openExplorerWindow(undefined, peer);
+                    }
+                    void renderDesktopIcons();
                     showToast(status.adopted
                         ? `Connected to the Eta already running on ${destination}`
                         : `${destination} is ready`, "success");

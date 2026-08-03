@@ -1975,6 +1975,7 @@ body.windowed {
   cursor: pointer;
 }
 .desktop-icon-art {
+  position: relative;
   display: grid;
   width: 44px;
   height: 44px;
@@ -2001,6 +2002,38 @@ body.windowed {
 .desktop-icon-art svg {
   width: 22px;
   height: 22px;
+}
+.desktop-icon-offline {
+  opacity: 0.62;
+  filter: saturate(0.4) opacity(0.85);
+  transition:
+    opacity 0.2s,
+    filter 0.2s;
+}
+.desktop-icon-offline:hover {
+  opacity: 0.88;
+  filter: saturate(0.8);
+}
+.desktop-status-dot {
+  position: absolute;
+  bottom: 2px;
+  right: 2px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--icon-accent, var(--identity-accent));
+  box-shadow:
+    0 0 0 2px rgba(18, 18, 24, 0.9),
+    0 0 8px var(--icon-accent, var(--identity-accent));
+  transition:
+    background 0.3s,
+    box-shadow 0.3s;
+}
+.desktop-status-dot.offline {
+  background: #64748b;
+  box-shadow:
+    0 0 0 2px rgba(18, 18, 24, 0.9),
+    0 0 6px rgba(0, 0, 0, 0.4);
 }
 .desktop-icon-label {
   max-width: 108px;

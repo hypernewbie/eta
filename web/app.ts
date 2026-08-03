@@ -3032,6 +3032,15 @@ function openShortcut(shortcut: DesktopShortcut, peer: Peer | null) {
 // openDesktopIcon() plus another rule in the menu — which is how the
 // peer icons ended up painted in the local machine's accent while the
 // windows they opened were painted correctly.
+const peerConnectionStatus = new Map<
+  string,
+  "online" | "offline" | "checking"
+>();
+function isPeerOnline(peer: Peer | null): boolean {
+  if (!peer) return true;
+  return peerConnectionStatus.get(peer.url) !== "offline";
+}
+
 type DesktopIconArt = { glyph: string } | { lucide: string };
 type DesktopIcon = {
   id: string;
@@ -3043,6 +3052,7 @@ type DesktopIcon = {
   art: DesktopIconArt;
   open: () => void;
   removable: boolean;
+  online?: boolean;
 };
 let desktopIconIndex = new Map<string, DesktopIcon>();
 let renderedDesktopIcons = "";
@@ -3058,17 +3068,25 @@ function desktopIconModel(roots: Root[]): DesktopIcon[] {
     art: { glyph: localHost.glyph },
     open: () => void openExplorerWindow(),
     removable: false,
+    online: true,
   });
   for (const peer of enrolledPeers) {
     const label = peerDisplayName(peer).toUpperCase();
+    const online = isPeerOnline(peer);
+    const title = online
+      ? `${label} (Connected)`
+      : peer.ssh_destination
+        ? `${label} (Disconnected — Double-click to reconnect)`
+        : `${label} (Disconnected)`;
     icons.push({
       id: `computer:${peer.url}`,
       label,
-      title: label,
+      title,
       peer,
       art: { glyph: peerDisplayGlyph(peer) },
       open: () => void openExplorerWindow(undefined, peer),
       removable: false,
+      online,
     });
   }
   icons.push({
@@ -3127,10 +3145,16 @@ function desktopIconMarkup(icon: DesktopIcon) {
       ? escapeHTML(icon.art.glyph)
       : `<i data-lucide="${escapeHTML(icon.art.lucide)}"></i>`;
   const glyph = "glyph" in icon.art ? " desktop-icon-glyph" : "";
+  const offlineClass =
+    icon.online === false && icon.peer ? " desktop-icon-offline" : "";
+  const statusBadge =
+    icon.peer && icon.online !== undefined
+      ? `<span class="desktop-status-dot${icon.online ? "" : " offline"}"></span>`
+      : "";
   return (
-    `<button type="button" class="desktop-icon" data-desktop-icon="${escapeHTML(icon.id)}"` +
+    `<button type="button" class="desktop-icon${offlineClass}" data-desktop-icon="${escapeHTML(icon.id)}"` +
     ` style="--icon-accent:${escapeHTML(windowAccent(icon.peer))}" title="${escapeHTML(icon.title)}">` +
-    `<span class="desktop-icon-art${glyph}">${art}</span>` +
+    `<span class="desktop-icon-art${glyph}">${art}${statusBadge}</span>` +
     `<span class="desktop-icon-label">${escapeHTML(icon.label)}</span></button>`
   );
 }
@@ -3540,6 +3564,10 @@ async function renderDesktopIcons() {
 }
 function openDesktopIcon(element: HTMLElement) {
   const icon = desktopIconIndex.get(element.dataset.desktopIcon || "");
+  if (icon?.peer && !isPeerOnline(icon.peer) && icon.peer.ssh_destination) {
+    createSetupPCWindow(icon.peer.ssh_destination);
+    return;
+  }
   icon?.open();
 }
 $("#desktop-icons").addEventListener("click", (event) => {
@@ -4211,11 +4239,14 @@ function createSetupPCWindow(
         if (status.phase === "ready") {
           spinner.hidden = true;
           enrolledPeers = await api("/api/peers");
-          void renderDesktopIcons();
           const peer = enrolledPeers.find(
             (p) => p.ssh_destination === destination || p.url === status.url,
           );
-          if (peer) void openExplorerWindow(undefined, peer);
+          if (peer) {
+            peerConnectionStatus.set(peer.url, "online");
+            void openExplorerWindow(undefined, peer);
+          }
+          void renderDesktopIcons();
           showToast(
             status.adopted
               ? `Connected to the Eta already running on ${destination}`
