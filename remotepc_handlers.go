@@ -68,10 +68,33 @@ func (s *server) handleRemotePCStatus(w http.ResponseWriter, r *http.Request) {
 			// closed port. Guarded because an instance can run without a peer
 			// inventory, as every other peer-touching handler here allows.
 			if s.peers != nil {
-				if err := s.peers.UpsertBySSHDestination(peers.Peer{
+				peer := peers.Peer{
 					SSHDestination: destination,
 					URL:            session.URL(),
-				}); err != nil {
+				}
+				// The browser renders each peer with peer.name.toUpperCase()
+				// and the destination-stamped accent and glyph (see
+				// refreshEtaMenu and desktopIconModel in web/app.ts), so a
+				// record without identity fields is a guaranteed crash.
+				// handlePeerAdd probes the peer's /api/identity for the same
+				// reason; an SSH setup must do the same.
+				//
+				// Preserve the identity on a reconnect, since the URL alone
+				// changes every session and a re-probe would race the user's
+				// reconnect click. A first-time setup against this destination
+				// has no existing record, so probe and fill the fields.
+				if existing, found, err := s.peers.FindBySSHDestination(destination); err == nil && found {
+					peer.Name = existing.Name
+					peer.ID = existing.ID
+					peer.Accent = existing.Accent
+					peer.Glyph = existing.Glyph
+				} else if identity, err := probePeer(r.Context(), session.URL()); err == nil {
+					peer.Name = identity.Hostname
+					peer.ID = identity.ID
+					peer.Accent = identity.Accent
+					peer.Glyph = identity.Glyph
+				}
+				if err := s.peers.UpsertBySSHDestination(peer); err != nil {
 					writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 					return
 				}

@@ -887,6 +887,25 @@ func (m *Manager) Pending(destination string) (*Session, bool) {
 	return session, ok
 }
 
+// SetSessionForTest inserts a ready Session into m.sessions for a
+// destination, for handler tests that need to drive the status /
+// identity-probe path without going through a real SSH install. The
+// production path is Manager.Connect. The exited channel is pre-closed
+// because a synthetic session has no real process to wait on, and
+// StopAll in t.Cleanup would otherwise block on the unread channel.
+func (m *Manager) SetSessionForTest(destination, url string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	session := &Session{
+		destination: destination,
+		url:         url,
+		phase:       PhaseReady,
+		exited:      make(chan struct{}),
+	}
+	close(session.exited)
+	m.sessions[destination] = session
+}
+
 // Starting reports whether a connect attempt is in progress for a
 // destination but has not yet produced a session. The status handler
 // answers "connecting" for this case, since a poll that lands a few

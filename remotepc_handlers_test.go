@@ -149,3 +149,74 @@ func jsonQuote(s string) string {
 	encoded, _ := json.Marshal(s)
 	return string(encoded)
 }
+
+// A successful SSH setup must hand the browser a peer with name, id,
+// accent, and glyph populated. The browser renders every peer with
+// peer.name.toUpperCase() and the destination-stamped accent and glyph
+// in refreshEtaMenu and desktopIconModel, so a record without those
+// fields is a guaranteed "peer.name is undefined" crash on the very
+// first paint of the new PC.
+//
+// handlePeerAdd has always probed /api/identity for the same reason;
+// the SSH setup path was the seam. A reconnect on the same destination
+// must reuse the identity from the existing record rather than
+// re-probing, since the URL alone changes every session and a re-probe
+// would race the user's click and could substitute different identity
+// fields if the remote was renamed between sessions.
+func TestRemotePCSetupPopulatesPeerIdentityOnReady(t *testing.T) {
+	// A real Eta server stood up for the duration of the test: it
+	// responds to /api/identity the way a freshly installed remote
+	// would, which is what handleRemotePCStatus is going to probe
+	// against the session's forwarded URL.
+	remote, err := newServer([]string{t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	remoteHTTP := httptest.NewServer(remote.routes())
+	defer remoteHTTP.Close()
+
+	s := remotePCTestServer(t)
+
+	// A session in PhaseReady at the remote's URL — exactly the state
+	// the status handler sees when a real setup finishes.
+	s.remotePCs.SetSessionForTest("minerva", remoteHTTP.URL)
+
+	recorder := httptest.NewRecorder()
+	s.routes().ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api/remote-pc?destination=minerva", nil))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d (%s)", recorder.Code, recorder.Body)
+	}
+	status := decodeStatus(t, recorder.Body.Bytes())
+	if status.Phase != "ready" {
+		t.Fatalf("expected phase ready, got %q", status.Phase)
+	}
+
+	after, found, err := s.peers.FindBySSHDestination("minerva")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !found {
+		t.Fatal("the peer record was not created on PhaseReady")
+	}
+	if after.Name == "" {
+		t.Fatal("peer.name must be populated; the browser's peer.name.toUpperCase() crashes otherwise")
+	}
+	if after.ID == "" || after.Accent == "" || after.Glyph == "" {
+		t.Errorf("peer identity fields must all be populated, got %+v", after)
+	}
+
+	// A reconnect on the same destination must preserve the identity
+	// from the existing record rather than re-probing, since the URL
+	// alone changes every session and a re-probe would race the
+	// user's click.
+	s.remotePCs.SetSessionForTest("minerva", "http://127.0.0.1:1") // a different forwarded port
+	recorder = httptest.NewRecorder()
+	s.routes().ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api/remote-pc?destination=minerva", nil))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("reconnect: expected 200, got %d (%s)", recorder.Code, recorder.Body)
+	}
+	preserved, _, _ := s.peers.FindBySSHDestination("minerva")
+	if preserved.Name != after.Name || preserved.Accent != after.Accent || preserved.Glyph != after.Glyph {
+		t.Errorf("a reconnect must preserve identity; got %+v, want %+v", preserved, after)
+	}
+}
