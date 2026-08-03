@@ -71,6 +71,7 @@ func (s *server) handleRemotePCConnect(w http.ResponseWriter, r *http.Request) {
 		// installs with the same password the user already has. Empty
 		// when the coordinator itself has no password configured.
 		AccessHash: s.access.EncodedVerifier(),
+		RepoURL:    "https://github.com/hypernewbie/eta.git",
 	}); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return

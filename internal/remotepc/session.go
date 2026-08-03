@@ -96,6 +96,10 @@ type Options struct {
 	// remote is left without one — matching the no-password case the
 	// coordinator itself is in.
 	AccessHash string
+	// RepoURL is the git repository URL used for shallow clone + build
+	// instead of `go install`. Empty means use the legacy `go install`
+	// path for backward compatibility.
+	RepoURL string
 }
 
 func (o Options) remotePort() int {
@@ -288,13 +292,8 @@ func freeLocalPort() (int, error) {
 //
 // Exposing $HOME needs no confirmation: it binds loopback only and is
 // reachable solely through this session's forward.
-func remoteCommand(sh shell, module, version, accessHash string, remotePort int) string {
+func remoteCommand(sh shell, module, version, accessHash, repoURL string, remotePort int) string {
 	port := strconv.Itoa(remotePort)
-	// The access file lives next to GOPATH so a single `rm -rf ~/.eta`
-	// removes binary, module cache and credentials together. The eta
-	// binary is told where it is via --access-file; the default path
-	// would be the user-config dir, which differs across platforms and
-	// would force the install script to know about all of them.
 	accessFile := `"$HOME/.eta/access.json"`
 	accessSetupPosix := ""
 	if accessHash != "" {
@@ -310,35 +309,50 @@ func remoteCommand(sh shell, module, version, accessHash string, remotePort int)
 		if accessHash != "" {
 			etaCommand += ` --access-file (Join-Path $env:GOPATH "access.json")`
 		}
-		return strings.Join([]string{
+		buildCmds := []string{
+			`Write-Output "ETA:installing"`,
+			`go install ` + module + `@` + version,
+			`if ($LASTEXITCODE -ne 0) { Write-Output "ETA:fail:go install failed"; exit 1 }`,
+		}
+		if repoURL != "" {
+			buildCmds = []string{
+				`Write-Output "ETA:installing"`,
+				`$repoDir = Join-Path $env:GOPATH "src\eta"`,
+				`if (-not (Test-Path (Join-Path $repoDir ".git"))) { New-Item -ItemType Directory -Force -Path (Join-Path $env:GOPATH "src") | Out-Null; git clone --depth 1 --single-branch "` + repoURL + `" "$repoDir"; if ($LASTEXITCODE -ne 0) { Write-Output "ETA:fail:git clone failed"; exit 1 } } else { Set-Location $repoDir; git fetch --depth 1 origin main; git reset --hard FETCH_HEAD; if ($LASTEXITCODE -ne 0) { Write-Output "ETA:fail:git fetch failed"; exit 1 } }`,
+				`Set-Location $repoDir`,
+				`go build -o (Join-Path $env:GOPATH "bin\eta.exe") .`,
+				`if ($LASTEXITCODE -ne 0) { Write-Output "ETA:fail:go build failed"; exit 1 }`,
+			}
+		}
+		parts := []string{
 			`$ErrorActionPreference = "Stop"`,
 			`if (-not (Get-Command go -ErrorAction SilentlyContinue)) { Write-Output "ETA:fail:no Go toolchain found on this PC (install Go, or make sure it is on the PATH for non-interactive SSH sessions)"; exit 1 }`,
 			`$env:GOPATH = Join-Path $HOME ".eta"`,
 			`$env:GOCACHE = Join-Path $env:GOPATH "build-cache"`,
 			`$env:GOFLAGS = "-modcacherw"`,
 			accessSetupPowerShell,
-			`Write-Output "ETA:installing"`,
-			`go install ` + module + `@` + version,
-			`if ($LASTEXITCODE -ne 0) { Write-Output "ETA:fail:go install failed"; exit 1 }`,
-			`Write-Output "ETA:starting"`,
-			etaCommand,
-		}, "; ")
+		}
+		parts = append(parts, buildCmds...)
+		parts = append(parts, `Write-Output "ETA:starting"`, etaCommand)
+		return strings.Join(parts, "; ")
 	default:
 		etaCommand := `exec "$GOPATH/bin/eta" --exit-on-stdin-close --ip 127.0.0.1 --port ` + port + ` --root "$HOME"`
 		if accessHash != "" {
 			etaCommand += ` --access-file ` + accessFile
 		}
-		return strings.Join([]string{
-			// Non-interactive SSH shells on macOS don't source .zshrc
-			// and may not source .zprofile either, so PATH doesn't
-			// include where Homebrew / the Go installer put `go`.
-			// Search for the binary itself rather than relying on PATH:
-			// Homebrew puts the go keg under /opt/homebrew/opt/go/bin
-			// for some formulae, and the user might have Go under a
-			// directory Homebrew did not add to PATH at install time.
-			// First hit wins; the list is ordered Apple-Silicon Homebrew,
-			// Homebrew keg-only, official Go installer, Intel Homebrew,
-			// user GOPATH, gvm/asdf, ~/.local/bin.
+		buildCmds := []string{
+			`echo "ETA:installing"`,
+			`go install ` + module + `@` + version + ` || { echo "ETA:fail:go install failed"; exit 1; }`,
+		}
+		if repoURL != "" {
+			buildCmds = []string{
+				`echo "ETA:installing"`,
+				`REPO_DIR="$GOPATH/src/eta"`,
+				`if [ ! -d "$REPO_DIR/.git" ]; then mkdir -p "$GOPATH/src" && git clone --depth 1 --single-branch "` + repoURL + `" "$REPO_DIR" || { echo "ETA:fail:git clone failed"; exit 1; }; else cd "$REPO_DIR" && git fetch --depth 1 origin main && git reset --hard FETCH_HEAD || { echo "ETA:fail:git fetch/reset failed"; exit 1; }; fi`,
+				`cd "$REPO_DIR" && go build -o "$GOPATH/bin/eta" . || { echo "ETA:fail:go build failed"; exit 1; }`,
+			}
+		}
+		parts := []string{
 			`for p in /opt/homebrew/bin /opt/homebrew/opt/go/bin /usr/local/go/bin /usr/local/bin "$HOME/go/bin" "$HOME/sdk/go/bin" "$HOME/.local/bin"; do if [ -x "$p/go" ]; then PATH="$p:$PATH"; break; fi; done`,
 			`export PATH`,
 			`command -v go >/dev/null 2>&1 || { echo "ETA:fail:no Go toolchain found on this PC (install Go, or make sure it is on the PATH for non-interactive SSH sessions)"; exit 1; }`,
@@ -346,11 +360,10 @@ func remoteCommand(sh shell, module, version, accessHash string, remotePort int)
 			`GOCACHE="$GOPATH/build-cache"; export GOCACHE`,
 			`GOFLAGS=-modcacherw; export GOFLAGS`,
 			accessSetupPosix,
-			`echo "ETA:installing"`,
-			`go install ` + module + `@` + version + ` || { echo "ETA:fail:go install failed"; exit 1; }`,
-			`echo "ETA:starting"`,
-			etaCommand,
-		}, "\n")
+		}
+		parts = append(parts, buildCmds...)
+		parts = append(parts, `echo "ETA:starting"`, etaCommand)
+		return strings.Join(parts, "\n")
 	}
 }
 
@@ -653,7 +666,7 @@ func install(ctx context.Context, opts Options) (*Session, error) {
 		exited:      make(chan struct{}),
 	}
 
-	cmd := exec.Command(sshBinary, append(args, remoteCommand(sh, module, version, opts.AccessHash, remotePort))...)
+	cmd := exec.Command(sshBinary, append(args, remoteCommand(sh, module, version, opts.AccessHash, opts.RepoURL, remotePort))...)
 	// Stdin stays open for the session's life and is the leash: closing it
 	// closes the ssh channel, the remote's stdin hits EOF, and
 	// --exit-on-stdin-close shuts it down. Same on POSIX and Windows,
