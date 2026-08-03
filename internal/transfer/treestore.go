@@ -37,13 +37,13 @@ type TreeStore struct {
 // TreeIntent is the durable per-session record. Persisted atomically
 // alongside the staging directory under {root}/.eta/intents/{id}.json.
 type TreeIntent struct {
-	Version      int                `json:"version"`
-	ID           string             `json:"id"`
-	Destination  string             `json:"destination"`
-	Directories  []string           `json:"directories"`
-	Files        []TreeIntentFile   `json:"files"`
-	Created      time.Time          `json:"created"`
-	LastProgress time.Time          `json:"lastProgress"`
+	Version      int              `json:"version"`
+	ID           string           `json:"id"`
+	Destination  string           `json:"destination"`
+	Directories  []string         `json:"directories"`
+	Files        []TreeIntentFile `json:"files"`
+	Created      time.Time        `json:"created"`
+	LastProgress time.Time        `json:"lastProgress"`
 }
 
 // TreeIntentFile is the per-file record kept in the intent. Size is the
