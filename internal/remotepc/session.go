@@ -332,9 +332,15 @@ func remoteCommand(sh shell, module, version, accessHash string, remotePort int)
 			// Non-interactive SSH shells on macOS don't source .zshrc
 			// and may not source .zprofile either, so PATH doesn't
 			// include where Homebrew / the Go installer put `go`.
-			// Common locations: Apple Silicon Homebrew, official Go
-			// installer, Intel Homebrew, user GOPATH bin, gvm/asdf.
-			`export PATH="/opt/homebrew/bin:/usr/local/go/bin:/usr/local/bin:$HOME/go/bin:$HOME/sdk/go/bin:$PATH"`,
+			// Search for the binary itself rather than relying on PATH:
+			// Homebrew puts the go keg under /opt/homebrew/opt/go/bin
+			// for some formulae, and the user might have Go under a
+			// directory Homebrew did not add to PATH at install time.
+			// First hit wins; the list is ordered Apple-Silicon Homebrew,
+			// Homebrew keg-only, official Go installer, Intel Homebrew,
+			// user GOPATH, gvm/asdf, ~/.local/bin.
+			`for p in /opt/homebrew/bin /opt/homebrew/opt/go/bin /usr/local/go/bin /usr/local/bin "$HOME/go/bin" "$HOME/sdk/go/bin" "$HOME/.local/bin"; do if [ -x "$p/go" ]; then PATH="$p:$PATH"; break; fi; done`,
+			`export PATH`,
 			`command -v go >/dev/null 2>&1 || { echo "ETA:fail:no Go toolchain found on this PC (install Go, or make sure it is on the PATH for non-interactive SSH sessions)"; exit 1; }`,
 			`GOPATH="$HOME/.eta"; export GOPATH`,
 			`GOCACHE="$GOPATH/build-cache"; export GOCACHE`,
