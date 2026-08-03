@@ -1695,7 +1695,7 @@ func (s *server) proxyPeer(w http.ResponseWriter, r *http.Request, route string)
 	remoteURL.RawQuery = query.Encode()
 
 	var reqBody io.Reader
-	if r.Body != nil {
+	if r.Method == http.MethodPost || r.Method == http.MethodPut || r.Method == http.MethodPatch {
 		reqBody = r.Body
 	}
 	request, err := http.NewRequestWithContext(r.Context(), r.Method, remoteURL.String(), reqBody)
