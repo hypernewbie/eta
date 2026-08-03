@@ -135,6 +135,19 @@ func (m *Manager) Enabled() bool {
 	return m.record != nil
 }
 
+// EncodedVerifier returns the on-disk form of the configured password
+// verifier (the format ParsePasswordHash accepts), or "" when no
+// password is configured. Used by the SSH setup path to forward the
+// same access control to a freshly installed remote eta.
+func (m *Manager) EncodedVerifier() string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.record == nil {
+		return ""
+	}
+	return m.record.encoded()
+}
+
 // StatusAndChallenge returns public KDF parameters and a single-use login
 // challenge from one locked snapshot, so a concurrent password change
 // cannot pair an old salt with a challenge for the new verifier.

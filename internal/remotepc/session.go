@@ -83,6 +83,19 @@ type Options struct {
 	// eta's own default. Set in tests so they never probe -- or adopt --
 	// a real instance the developer is running on this machine.
 	RemotePort int
+	// Host is the local address the ssh forward binds to and the host
+	// that ends up in the peer's URL. Empty means loopback (127.0.0.1),
+	// which only works for a browser on the same machine as the
+	// coordinator; the handler passes the request Host so the same
+	// forward is reachable from the browser wherever it is.
+	Host string
+	// AccessHash is the encoded PBKDF2 verifier the coordinator has
+	// already derived, forwarded to the remote so the freshly installed
+	// eta on that PC has the same access password as the coordinator.
+	// Empty means the coordinator has no password configured and the
+	// remote is left without one — matching the no-password case the
+	// coordinator itself is in.
+	AccessHash string
 }
 
 func (o Options) remotePort() int {
@@ -258,11 +271,16 @@ func freeLocalPort() (int, error) {
 	return listener.Addr().(*net.TCPAddr).Port, nil
 }
 
-// remoteCommand is the whole remote side: three env vars, install, run.
+// remoteCommand is the whole remote side: three env vars, install,
+// optional access-password file, run.
 //
 // Nothing user-supplied is interpolated — module and version come from
 // this binary's build info, ports are ints, root is the remote's own
 // $HOME — so there is no quoting regime and no shell-quoting helper.
+// accessHash, when set, is the encoded PBKDF2 verifier record written
+// to the access file the remote eta reads on startup, so the remote
+// has the same access control as the coordinator; it is base64 with
+// dots, which is shell-safe without escaping.
 //
 // GOPATH and GOCACHE sit in ~/.eta so one removal covers binary, module
 // cache and build cache. -modcacherw is required for that removal to
@@ -270,32 +288,56 @@ func freeLocalPort() (int, error) {
 //
 // Exposing $HOME needs no confirmation: it binds loopback only and is
 // reachable solely through this session's forward.
-func remoteCommand(sh shell, module, version string, remotePort int) string {
+func remoteCommand(sh shell, module, version, accessHash string, remotePort int) string {
 	port := strconv.Itoa(remotePort)
+	// The access file lives next to GOPATH so a single `rm -rf ~/.eta`
+	// removes binary, module cache and credentials together. The eta
+	// binary is told where it is via --access-file; the default path
+	// would be the user-config dir, which differs across platforms and
+	// would force the install script to know about all of them.
+	accessFile := `"$HOME/.eta/access.json"`
+	accessSetupPosix := ""
+	if accessHash != "" {
+		accessSetupPosix = `mkdir -p "$HOME/.eta" && printf '%s' '{"password_hash":"` + accessHash + `"}' > ` + accessFile + ` && chmod 600 ` + accessFile
+	}
+	accessSetupPowerShell := ""
+	if accessHash != "" {
+		accessSetupPowerShell = `New-Item -ItemType Directory -Force -Path (Join-Path $HOME ".eta") | Out-Null; Set-Content -Path (Join-Path $HOME ".eta\access.json") -Value '{"password_hash":"` + accessHash + `"}' -NoNewline`
+	}
 	switch sh {
 	case shellPowerShell:
+		etaCommand := `& (Join-Path $env:GOPATH "bin\eta.exe") --exit-on-stdin-close --ip 127.0.0.1 --port ` + port + ` --root $HOME`
+		if accessHash != "" {
+			etaCommand += ` --access-file (Join-Path $env:GOPATH "access.json")`
+		}
 		return strings.Join([]string{
 			`$ErrorActionPreference = "Stop"`,
 			`if (-not (Get-Command go -ErrorAction SilentlyContinue)) { Write-Output "ETA:fail:no Go toolchain found on this PC (install Go, or make sure it is on the PATH for non-interactive SSH sessions)"; exit 1 }`,
 			`$env:GOPATH = Join-Path $HOME ".eta"`,
 			`$env:GOCACHE = Join-Path $env:GOPATH "build-cache"`,
 			`$env:GOFLAGS = "-modcacherw"`,
+			accessSetupPowerShell,
 			`Write-Output "ETA:installing"`,
 			`go install ` + module + `@` + version,
 			`if ($LASTEXITCODE -ne 0) { Write-Output "ETA:fail:go install failed"; exit 1 }`,
 			`Write-Output "ETA:starting"`,
-			`& (Join-Path $env:GOPATH "bin\eta.exe") --exit-on-stdin-close --ip 127.0.0.1 --port ` + port + ` --root $HOME`,
+			etaCommand,
 		}, "; ")
 	default:
+		etaCommand := `exec "$GOPATH/bin/eta" --exit-on-stdin-close --ip 127.0.0.1 --port ` + port + ` --root "$HOME"`
+		if accessHash != "" {
+			etaCommand += ` --access-file ` + accessFile
+		}
 		return strings.Join([]string{
 			`command -v go >/dev/null 2>&1 || { echo "ETA:fail:no Go toolchain found on this PC (install Go, or make sure it is on the PATH for non-interactive SSH sessions)"; exit 1; }`,
 			`GOPATH="$HOME/.eta"; export GOPATH`,
 			`GOCACHE="$GOPATH/build-cache"; export GOCACHE`,
 			`GOFLAGS=-modcacherw; export GOFLAGS`,
+			accessSetupPosix,
 			`echo "ETA:installing"`,
 			`go install ` + module + `@` + version + ` || { echo "ETA:fail:go install failed"; exit 1; }`,
 			`echo "ETA:starting"`,
-			`exec "$GOPATH/bin/eta" --exit-on-stdin-close --ip 127.0.0.1 --port ` + port + ` --root "$HOME"`,
+			etaCommand,
 		}, "\n")
 	}
 }
@@ -409,7 +451,7 @@ func Begin(ctx context.Context, opts Options) (*Session, error) {
 	if err := validateDestination(opts.Destination); err != nil {
 		return nil, err
 	}
-	if session, ok := adopt(ctx, opts.Destination, opts.remotePort()); ok {
+	if session, ok := adopt(ctx, opts.Destination, opts.remotePort(), opts.Host); ok {
 		return session, nil
 	}
 	return install(ctx, opts)
@@ -439,13 +481,17 @@ func Begin(ctx context.Context, opts Options) (*Session, error) {
 // Whether it is really eta answering is decided by asking it, not by
 // finding something bound to the port: anything at all can be listening
 // on 7080, and only eta answers its own health endpoint.
-func adopt(ctx context.Context, destination string, remotePort int) (*Session, bool) {
+func adopt(ctx context.Context, destination string, remotePort int, host string) (*Session, bool) {
 	localPort, err := freeLocalPort()
 	if err != nil {
 		return nil, false
 	}
+	bind := host
+	if bind == "" {
+		bind = "127.0.0.1"
+	}
 	args, err := sshArgsMode(destination,
-		fmt.Sprintf("127.0.0.1:%d:127.0.0.1:%d", localPort, remotePort), true)
+		fmt.Sprintf("%s:%d:127.0.0.1:%d", bind, localPort, remotePort), true)
 	if err != nil {
 		return nil, false
 	}
@@ -472,7 +518,7 @@ func adopt(ctx context.Context, destination string, remotePort int) (*Session, b
 
 	session := &Session{
 		destination: destination,
-		url:         "http://127.0.0.1:" + strconv.Itoa(localPort),
+		url:         "http://" + bind + ":" + strconv.Itoa(localPort),
 		localPort:   localPort,
 		adopted:     true,
 		phase:       PhaseChecking,
@@ -575,7 +621,11 @@ func install(ctx context.Context, opts Options) (*Session, error) {
 		return nil, err
 	}
 
-	forward := fmt.Sprintf("127.0.0.1:%d:127.0.0.1:%d", localPort, remotePort)
+	bind := opts.Host
+	if bind == "" {
+		bind = "127.0.0.1"
+	}
+	forward := fmt.Sprintf("%s:%d:127.0.0.1:%d", bind, localPort, remotePort)
 	args, err := sshArgs(opts.Destination, forward)
 	if err != nil {
 		return nil, err
@@ -586,12 +636,12 @@ func install(ctx context.Context, opts Options) (*Session, error) {
 
 	session := &Session{
 		destination: opts.Destination,
-		url:         "http://127.0.0.1:" + strconv.Itoa(localPort),
+		url:         "http://" + bind + ":" + strconv.Itoa(localPort),
 		phase:       PhaseConnecting,
 		exited:      make(chan struct{}),
 	}
 
-	cmd := exec.Command(sshBinary, append(args, remoteCommand(sh, module, version, remotePort))...)
+	cmd := exec.Command(sshBinary, append(args, remoteCommand(sh, module, version, opts.AccessHash, remotePort))...)
 	// Stdin stays open for the session's life and is the leash: closing it
 	// closes the ssh channel, the remote's stdin hits EOF, and
 	// --exit-on-stdin-close shuts it down. Same on POSIX and Windows,

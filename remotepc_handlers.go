@@ -40,7 +40,18 @@ func (s *server) handleRemotePCConnect(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "no SSH destination given"})
 		return
 	}
-	if err := s.remotePCs.ConnectAsync(remotepc.Options{Destination: destination}); err != nil {
+	if err := s.remotePCs.ConnectAsync(remotepc.Options{
+		Destination: destination,
+		// The address the browser used to reach this server is also
+		// the address the ssh forward can be reached on. Empty Host
+		// would fall back to 127.0.0.1, which only works for a
+		// browser on the same machine.
+		Host: r.Host,
+		// Forward the coordinator's access verifier so the remote
+		// installs with the same password the user already has. Empty
+		// when the coordinator itself has no password configured.
+		AccessHash: s.access.EncodedVerifier(),
+	}); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}

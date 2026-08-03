@@ -274,3 +274,20 @@ func TestExpiredSessionAndChallengeAreRejected(t *testing.T) {
 		t.Fatalf("expired challenge: got %v want ErrUnauthorized", err)
 	}
 }
+
+// EncodedVerifier is what the SSH setup path forwards to a remote so
+// the freshly installed eta has the same access password. Empty until
+// a password is configured, then the round-trippable on-disk form.
+func TestEncodedVerifierReflectsConfiguration(t *testing.T) {
+	m := NewManager()
+	if got := m.EncodedVerifier(); got != "" {
+		t.Fatalf("an unconfigured manager must return \"\", got %q", got)
+	}
+	hash := testHash()
+	if err := m.Configure(hash); err != nil {
+		t.Fatal(err)
+	}
+	if got := m.EncodedVerifier(); got != hash {
+		t.Fatalf("expected the configured hash to round-trip, got %q", got)
+	}
+}

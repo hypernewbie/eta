@@ -70,12 +70,30 @@ func TestSSHArgsOmitsForwardOptionsWhenThereIsNoForward(t *testing.T) {
 	}
 }
 
+// The forward's local side is the address the browser used to reach
+// the coordinator, so the same forward is reachable from the browser
+// wherever it is. Empty Host falls back to 127.0.0.1, which only works
+// for a browser on the same machine.
+func TestRemoteCommandForwardHostFollowsOptionsHost(t *testing.T) {
+	// The forward shape is encoded in the install path, not in
+	// remoteCommand itself: verify it through sshArgsMode with a host
+	// the test stands in for.
+	args, err := sshArgsMode("minerva", "192.168.1.10:44715:127.0.0.1:7080", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(args, " ")
+	if !strings.Contains(joined, "-L 192.168.1.10:44715:127.0.0.1:7080") {
+		t.Errorf("expected the local-forward bind to use the request host, got ssh args: %v", args)
+	}
+}
+
 // TestRemoteCommandContainsEverythingUnderDotEta guards the promise that
 // cleanup is one directory: if GOPATH, the build cache or the binary
 // escaped ~/.eta, removing it would leave gigabytes of cache behind
 // somewhere the user never agreed to.
 func TestRemoteCommandContainsEverythingUnderDotEta(t *testing.T) {
-	posix := remoteCommand(shellPOSIX, "github.com/hypernewbie/eta", "v1.2.3", 9999)
+	posix := remoteCommand(shellPOSIX, "github.com/hypernewbie/eta", "v1.2.3", "", 9999)
 	for _, want := range []string{
 		`GOPATH="$HOME/.eta"`,
 		`GOCACHE="$GOPATH/build-cache"`,
@@ -85,7 +103,7 @@ func TestRemoteCommandContainsEverythingUnderDotEta(t *testing.T) {
 			t.Errorf("expected %q in the POSIX command, got:\n%s", want, posix)
 		}
 	}
-	powershell := remoteCommand(shellPowerShell, "github.com/hypernewbie/eta", "v1.2.3", 9999)
+	powershell := remoteCommand(shellPowerShell, "github.com/hypernewbie/eta", "v1.2.3", "", 9999)
 	for _, want := range []string{
 		`$env:GOPATH = Join-Path $HOME ".eta"`,
 		`$env:GOCACHE = Join-Path $env:GOPATH "build-cache"`,
@@ -100,7 +118,7 @@ func TestRemoteCommandContainsEverythingUnderDotEta(t *testing.T) {
 // so without this a recursive remove of ~/.eta fails partway through.
 func TestRemoteCommandSetsModcacherw(t *testing.T) {
 	for _, sh := range []shell{shellPOSIX, shellPowerShell} {
-		if !strings.Contains(remoteCommand(sh, "m", "v1", 1), "-modcacherw") {
+		if !strings.Contains(remoteCommand(sh, "m", "v1", "", 1), "-modcacherw") {
 			t.Errorf("shell %v: expected -modcacherw, without which ~/.eta cannot be removed", sh)
 		}
 	}
@@ -110,7 +128,7 @@ func TestRemoteCommandSetsModcacherw(t *testing.T) {
 // listen on a routable interface, and must exit when this side goes away.
 func TestRemoteCommandBindsLoopbackAndLeashesItself(t *testing.T) {
 	for _, sh := range []shell{shellPOSIX, shellPowerShell} {
-		command := remoteCommand(sh, "m", "v1", 4321)
+		command := remoteCommand(sh, "m", "v1", "", 4321)
 		for _, want := range []string{"--ip 127.0.0.1", "--exit-on-stdin-close", "--port 4321"} {
 			if !strings.Contains(command, want) {
 				t.Errorf("shell %v: expected %q in:\n%s", sh, want, command)
@@ -121,7 +139,7 @@ func TestRemoteCommandBindsLoopbackAndLeashesItself(t *testing.T) {
 
 func TestRemoteCommandFailsClearlyWithoutAGoToolchain(t *testing.T) {
 	for _, sh := range []shell{shellPOSIX, shellPowerShell} {
-		command := remoteCommand(sh, "m", "v1", 1)
+		command := remoteCommand(sh, "m", "v1", "", 1)
 		if !strings.Contains(command, "ETA:fail:no Go toolchain found") {
 			t.Errorf("shell %v: a missing Go toolchain must be reported as a clear failure, not a shell error", sh)
 		}
@@ -134,7 +152,7 @@ func TestPOSIXCommandIsValidShellSyntax(t *testing.T) {
 	if _, err := exec.LookPath("sh"); err != nil {
 		t.Skip("no sh to check against")
 	}
-	command := remoteCommand(shellPOSIX, "github.com/hypernewbie/eta", "v0.1.0", 7099)
+	command := remoteCommand(shellPOSIX, "github.com/hypernewbie/eta", "v0.1.0", "", 7099)
 	if out, err := exec.Command("sh", "-n", "-c", command).CombinedOutput(); err != nil {
 		t.Fatalf("generated POSIX command is not valid sh: %v\n%s\ncommand:\n%s", err, out, command)
 	}
@@ -173,6 +191,52 @@ func TestPOSIXCleanupCommandIsValidShellSyntax(t *testing.T) {
 	}
 	if out, err := exec.Command("sh", "-n", "-c", cleanupCommand(shellPOSIX)).CombinedOutput(); err != nil {
 		t.Fatalf("generated cleanup command is not valid sh: %v\n%s", err, out)
+	}
+}
+
+// The remote install command must include the access file when the
+// coordinator has a password configured, and omit it (and the eta
+// --access-file flag) when it does not. A coordinator without a
+// password forwards no hash, so the remote also runs without one —
+// matching the no-password case the coordinator itself is in. The
+// file lands next to GOPATH so `rm -rf ~/.eta` removes binary,
+// module cache, and credentials together.
+func TestRemoteCommandWritesAccessFileWhenHashIsSet(t *testing.T) {
+	const sampleHash = "v1.pbkdf2-sha256.600000.c2FsdA.vZXJpZg"
+	for _, sh := range []shell{shellPOSIX, shellPowerShell} {
+		command := remoteCommand(sh, "m", "v1", sampleHash, 7080)
+		if !strings.Contains(command, sampleHash) {
+			t.Errorf("shell %v: the forwarded hash must appear in the install command, got:\n%s", sh, command)
+		}
+		if !strings.Contains(command, "access.json") {
+			t.Errorf("shell %v: the install command must create an access.json on the remote, got:\n%s", sh, command)
+		}
+		if !strings.Contains(command, "--access-file") {
+			t.Errorf("shell %v: the eta binary must be told where the access file is, got:\n%s", sh, command)
+		}
+	}
+}
+
+func TestRemoteCommandOmitsAccessFileWhenNoHash(t *testing.T) {
+	for _, sh := range []shell{shellPOSIX, shellPowerShell} {
+		command := remoteCommand(sh, "m", "v1", "", 7080)
+		if strings.Contains(command, "password_hash") {
+			t.Errorf("shell %v: an empty access hash must not write any access file, got:\n%s", sh, command)
+		}
+		if strings.Contains(command, "--access-file") {
+			t.Errorf("shell %v: an empty access hash must not pass --access-file to the eta binary, got:\n%s", sh, command)
+		}
+	}
+}
+
+func TestRemoteCommandWithAccessFileIsValidShellSyntax(t *testing.T) {
+	if _, err := exec.LookPath("sh"); err != nil {
+		t.Skip("no sh to check against")
+	}
+	const sampleHash = "v1.pbkdf2-sha256.600000.c2FsdA.vZXJpZg"
+	command := remoteCommand(shellPOSIX, "m", "v1", sampleHash, 7080)
+	if out, err := exec.Command("sh", "-n", "-c", command).CombinedOutput(); err != nil {
+		t.Fatalf("the access-file branch of the install command is not valid sh: %v\n%s\ncommand:\n%s", err, out, command)
 	}
 }
 
