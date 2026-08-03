@@ -205,6 +205,48 @@
       aria-label="Desktop"
       hidden
     ></div>
+    <aside
+      id="desktop-widgets"
+      class="desktop-widgets"
+      aria-label="Desktop Widgets"
+      hidden
+    >
+      <section class="widget-card widget-clock">
+        <div id="widget-clock-time" class="widget-clock-time">00:00</div>
+        <div id="widget-clock-date" class="widget-clock-date">---, --- 00</div>
+        <div id="widget-calendar" class="widget-calendar"></div>
+      </section>
+      <section class="widget-card widget-network">
+        <div class="widget-header">
+          <i data-lucide="activity"></i>
+          <span>NETWORK TRAFFIC</span>
+        </div>
+        <div class="widget-net-stats">
+          <div class="net-stat-row">
+            <span class="net-stat-label"
+              ><i data-lucide="arrow-up"></i> Sent</span
+            >
+            <span id="widget-net-tx-speed" class="net-stat-value"
+              >0.0 KB/s</span
+            >
+          </div>
+          <div class="net-stat-row">
+            <span class="net-stat-label"
+              ><i data-lucide="arrow-down"></i> Rcvd</span
+            >
+            <span id="widget-net-rx-speed" class="net-stat-value"
+              >0.0 KB/s</span
+            >
+          </div>
+        </div>
+        <div class="widget-net-totals">
+          <span id="widget-net-total-bytes" class="widget-net-subtext"
+            >Total: 0 MB</span
+          >
+          <span id="widget-net-transfers" class="widget-net-subtext">Idle</span>
+        </div>
+      </section>
+    </aside>
     <div id="desktop-context-menu" class="file-context-menu" hidden>
       <button type="button" data-desktop-action="open">
         <i data-lucide="folder-open"></i> Open

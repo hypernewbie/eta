@@ -25,6 +25,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -108,6 +109,14 @@ type server struct {
 	treeStores   []*transfer.TreeStore
 	terminals    *terminal.Manager
 	advertiseURL string
+	netStatsMu       sync.Mutex
+	rxBytes          uint64
+	txBytes          uint64
+	lastNetCheckTime time.Time
+	lastRxBytes      uint64
+	lastTxBytes      uint64
+	currentRxKbs     float64
+	currentTxKbs     float64
 	// shutdown cancels long-running background goroutines so they
 	// don't outlive the http.Server's 10s shutdown grace period.
 	shutdown       context.Context
@@ -577,12 +586,77 @@ func (s *server) routes() http.Handler {
 	mux.HandleFunc("POST /api/copy", s.handleCopy)
 	mux.HandleFunc("POST /api/rename", s.handleRename)
 	mux.HandleFunc("POST /api/delete", s.handleDelete)
+	mux.HandleFunc("GET /api/stats/network", s.handleStatsNetwork)
+	mux.HandleFunc("GET /api/remote/stats/network", s.handleRemoteStatsNetwork)
 	mux.HandleFunc("GET /api/list", s.handleList)
 	mux.HandleFunc("GET /api/preview", s.handlePreview)
 	mux.HandleFunc("GET /api/thumbnail", s.handleThumbnail)
 	mux.HandleFunc("GET /api/file", s.handleFile)
 	mux.Handle("/", http.FileServer(http.FS(s.web)))
-	return securityHeaders(s.accessAuthMiddleware(mux))
+	return securityHeaders(s.accessAuthMiddleware(s.trafficStatsMiddleware(mux)))
+}
+
+type responseWriterCounter struct {
+	http.ResponseWriter
+	written uint64
+}
+
+func (w *responseWriterCounter) Write(b []byte) (int, error) {
+	n, err := w.ResponseWriter.Write(b)
+	w.written += uint64(n)
+	return n, err
+}
+
+func (s *server) trafficStatsMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		rw := &responseWriterCounter{ResponseWriter: w}
+		reqLen := uint64(r.ContentLength)
+		if reqLen > 0 {
+			atomic.AddUint64(&s.rxBytes, reqLen)
+		}
+		next.ServeHTTP(rw, r)
+		if rw.written > 0 {
+			atomic.AddUint64(&s.txBytes, rw.written)
+		}
+	})
+}
+
+func (s *server) handleStatsNetwork(w http.ResponseWriter, r *http.Request) {
+	s.netStatsMu.Lock()
+	now := time.Now()
+	currRx := atomic.LoadUint64(&s.rxBytes)
+	currTx := atomic.LoadUint64(&s.txBytes)
+
+	if !s.lastNetCheckTime.IsZero() {
+		elapsed := now.Sub(s.lastNetCheckTime).Seconds()
+		if elapsed > 0.1 {
+			rxDiff := float64(currRx - s.lastRxBytes)
+			txDiff := float64(currTx - s.lastTxBytes)
+			s.currentRxKbs = (rxDiff / 1024.0) / elapsed
+			s.currentTxKbs = (txDiff / 1024.0) / elapsed
+		}
+	} else {
+		s.currentRxKbs = 0
+		s.currentTxKbs = 0
+	}
+	s.lastNetCheckTime = now
+	s.lastRxBytes = currRx
+	s.lastTxBytes = currTx
+
+	rxKbs := s.currentRxKbs
+	txKbs := s.currentTxKbs
+	s.netStatsMu.Unlock()
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"rxBytes":    currRx,
+		"txBytes":    currTx,
+		"rxSpeedKbs": rxKbs,
+		"txSpeedKbs": txKbs,
+	})
+}
+
+func (s *server) handleRemoteStatsNetwork(w http.ResponseWriter, r *http.Request) {
+	s.proxyPeer(w, r, "/api/stats/network")
 }
 
 func (s *server) handleIdentity(w http.ResponseWriter, r *http.Request) {

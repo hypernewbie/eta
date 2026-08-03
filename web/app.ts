@@ -3578,12 +3578,119 @@ function initTray() {
     }
   });
 }
+let desktopWidgetsTimer: number | null = null;
+let lastCalendarMonthStr = "";
+
+function initDesktopWidgets() {
+  if (desktopWidgetsTimer) return;
+  void updateDesktopWidgets();
+  desktopWidgetsTimer = window.setInterval(() => {
+    void updateDesktopWidgets();
+  }, 1000);
+}
+
+async function updateDesktopWidgets() {
+  const layer = $("#desktop-widgets");
+  if (!layer) return;
+
+  const anyMaximized = document.querySelector(".winbox.max") !== null;
+  if (!desktopEnabled() || anyMaximized) {
+    layer.hidden = true;
+    return;
+  }
+  layer.hidden = false;
+
+  const now = new Date();
+  const timeStr = now.toLocaleTimeString([], {
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+  const dateStr = now.toLocaleDateString([], {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+  });
+
+  const clockTimeEl = $("#widget-clock-time");
+  if (clockTimeEl && clockTimeEl.textContent !== timeStr) {
+    clockTimeEl.textContent = timeStr;
+  }
+  const clockDateEl = $("#widget-clock-date");
+  if (clockDateEl && clockDateEl.textContent !== dateStr) {
+    clockDateEl.textContent = dateStr;
+  }
+
+  const monthStr = `${now.getFullYear()}-${now.getMonth()}-${now.getDate()}`;
+  if (monthStr !== lastCalendarMonthStr) {
+    lastCalendarMonthStr = monthStr;
+    renderWidgetCalendar(now);
+  }
+
+  if (now.getSeconds() % 2 === 0) {
+    try {
+      const stats = await api("/api/stats/network");
+      const txEl = $("#widget-net-tx-speed");
+      if (txEl) txEl.textContent = `${(stats.txSpeedKbs || 0).toFixed(1)} KB/s`;
+      const rxEl = $("#widget-net-rx-speed");
+      if (rxEl) rxEl.textContent = `${(stats.rxSpeedKbs || 0).toFixed(1)} KB/s`;
+
+      const totalBytes = (stats.txBytes || 0) + (stats.rxBytes || 0);
+      const totalEl = $("#widget-net-total-bytes");
+      if (totalEl) totalEl.textContent = `Total: ${bytes(totalBytes)}`;
+
+      const jobs = await api("/api/transfer-jobs").catch(() => []);
+      const activeCount = Array.isArray(jobs)
+        ? jobs.filter((j: any) => j.status === "running").length
+        : 0;
+      const xferEl = $("#widget-net-transfers");
+      if (xferEl) {
+        xferEl.textContent = activeCount > 0 ? `${activeCount} Active` : "Idle";
+      }
+    } catch {
+      // Degrade silently if network stats API fails
+    }
+  }
+}
+
+function renderWidgetCalendar(now: Date) {
+  const calEl = $("#widget-calendar");
+  if (!calEl) return;
+
+  const year = now.getFullYear();
+  const month = now.getMonth();
+  const todayDate = now.getDate();
+
+  const firstDay = new Date(year, month, 1).getDay();
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
+
+  let html = '<div class="widget-cal-grid">';
+  const dayHeaders = ["S", "M", "T", "W", "T", "F", "S"];
+  for (const h of dayHeaders) {
+    html += `<div class="widget-cal-day-header">${h}</div>`;
+  }
+
+  for (let i = 0; i < firstDay; i++) {
+    html += '<div class="widget-cal-day"></div>';
+  }
+
+  for (let day = 1; day <= daysInMonth; day++) {
+    const isToday = day === todayDate;
+    html += `<div class="widget-cal-day in-month${isToday ? " today" : ""}">${day}</div>`;
+  }
+  html += "</div>";
+
+  calEl.innerHTML = html;
+}
+
 async function renderDesktopIcons() {
   const layer = $("#desktop-icons");
   if (!desktopEnabled()) {
     layer.hidden = true;
+    const widgetLayer = $("#desktop-widgets");
+    if (widgetLayer) widgetLayer.hidden = true;
     return;
   }
+  initDesktopWidgets();
   let roots: Root[] = [];
   try {
     roots = await api("/api/roots");
@@ -3594,10 +3701,6 @@ async function renderDesktopIcons() {
   desktopIconIndex = new Map(icons.map((icon) => [icon.id, icon]));
   const markup = icons.map(desktopIconMarkup).join("");
   layer.hidden = false;
-  // This runs on every taskbar refresh, and replacing the markup while
-  // lucide is mid-walk detaches the nodes it is about to swap, which
-  // throws "removeChild ... not a child of this node". Nothing to do
-  // when the desktop has not changed.
   if (markup === renderedDesktopIcons) return;
   renderedDesktopIcons = markup;
   layer.innerHTML = markup;

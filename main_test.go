@@ -40,6 +40,39 @@ func TestMediaTypes(t *testing.T) {
 	}
 }
 
+func TestStatsNetworkEndpoint(t *testing.T) {
+	s := &server{}
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /api/stats/network", s.handleStatsNetwork)
+	handler := s.trafficStatsMiddleware(mux)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("GET", "/api/stats/network", nil)
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK, got %d", rec.Code)
+	}
+
+	var res map[string]interface{}
+	if err := json.NewDecoder(rec.Body).Decode(&res); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+
+	if _, ok := res["rxBytes"]; !ok {
+		t.Error("expected rxBytes in response")
+	}
+	if _, ok := res["txBytes"]; !ok {
+		t.Error("expected txBytes in response")
+	}
+	if _, ok := res["rxSpeedKbs"]; !ok {
+		t.Error("expected rxSpeedKbs in response")
+	}
+	if _, ok := res["txSpeedKbs"]; !ok {
+		t.Error("expected txSpeedKbs in response")
+	}
+}
+
 func TestCoordinatorDeletesRemoteSourceAfterMove(t *testing.T) {
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "source.bin"), []byte("eta"), 0600); err != nil {
