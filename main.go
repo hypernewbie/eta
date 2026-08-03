@@ -150,6 +150,7 @@ func main() {
 	advertiseURL := flag.String("advertise-url", "", "public http(s) URL peers use to send files here (default: request host)")
 	versionFlag := flag.Bool("version", false, "print version and exit")
 	rootsFile := flag.String("roots-file", "", "persistent root-directory inventory file (default: user config directory)")
+	exitOnStdinClose := flag.Bool("exit-on-stdin-close", false, "shut down when stdin reaches EOF; set when eta is started over an SSH session so it exits with that connection")
 	flag.Var(&rootPaths, "root", "directory to expose (repeatable; defaults to the current directory; ignored once --roots-file already has entries, since roots are then managed from Settings)")
 	flag.Parse()
 
@@ -341,6 +342,23 @@ func main() {
 	}
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
+	if *exitOnStdinClose {
+		// The leash for an eta started on another machine over SSH: when
+		// that connection ends, stdin hits EOF and this exits with it, so
+		// no daemon, service or unit is needed on the remote.
+		//
+		// Stdin EOF is the portable "my client went away" — same contract
+		// as a language server or `docker system dial-stdio`. A pty plus
+		// SIGHUP would need `ssh -t`, and Windows has no SIGHUP and would
+		// give ConPTY screen-repaint output instead of readable lines.
+		//
+		// Feeds the same stop channel as a real signal, so there's one
+		// shutdown path, not a second that could drift.
+		go func() {
+			_, _ = io.Copy(io.Discard, os.Stdin)
+			stop <- syscall.SIGTERM
+		}()
+	}
 	go func() {
 		<-stop
 		// Cancel in-flight transfer and sweep goroutines so they
