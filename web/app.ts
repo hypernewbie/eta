@@ -718,7 +718,17 @@ async function api(
   return body;
 }
 function showToast(message, variant = "danger") {
-  const alert = $("#error-toast");
+  const alert = document.querySelector("#error-toast") as
+    | (HTMLElement & { variant?: string; toast?: () => void })
+    | null;
+  if (!alert) {
+    // Fall back to the console and the browser's own dialog if the
+    // Shoelace alert isn't on the page. The throwing $() helper would
+    // surface a noisy "Missing required element" instead of the toast
+    // text, which is what a user actually wants to see.
+    console[variant === "success" ? "log" : "error"](message);
+    return;
+  }
   alert.variant = variant;
   // The icon was fixed at circle-alert, so a success read as a warning
   // wearing a green border.
@@ -733,7 +743,7 @@ function showToast(message, variant = "danger") {
     }"></i>`;
     iconify();
   }
-  $("#error-message").textContent = message;
+  (alert.querySelector("#error-message") as HTMLElement).textContent = message;
   alert.toast();
 }
 
