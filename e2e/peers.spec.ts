@@ -48,6 +48,11 @@ test("enrolled peer opens as a source-aware remote Explorer @peer", async ({
       join(peerCacheDir, "state.json"),
       "--peers-file",
       join(peerCacheDir, "peers.json"),
+      // Every persistent-state flag, without exception — see _peer.ts.
+      "--access-file",
+      join(peerCacheDir, "access.json"),
+      "--roots-file",
+      join(peerCacheDir, "roots.json"),
       "--thumbnail-cache-dir",
       join(peerCacheDir, "thumbnails"),
       "--remote-cache-dir",

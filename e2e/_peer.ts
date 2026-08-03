@@ -59,6 +59,13 @@ export async function startPeer(name: string): Promise<PeerFixture> {
       join(peerCacheDir, "state.json"),
       "--peers-file",
       join(peerCacheDir, "peers.json"),
+      // Every persistent-state flag, without exception: one left off falls
+      // back to the real user config directory, so a peer fixture reads
+      // the developer's own access password and roots.
+      "--access-file",
+      join(peerCacheDir, "access.json"),
+      "--roots-file",
+      join(peerCacheDir, "roots.json"),
       "--thumbnail-cache-dir",
       join(peerCacheDir, "thumbnails"),
       "--remote-cache-dir",
