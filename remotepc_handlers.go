@@ -27,16 +27,16 @@ func (s *server) handleRemotePCConnect(w http.ResponseWriter, r *http.Request) {
 		Destination string `json:"destination"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
-		http.Error(w, "invalid request body", http.StatusBadRequest)
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
 		return
 	}
 	destination := strings.TrimSpace(request.Destination)
 	if destination == "" {
-		http.Error(w, "no SSH destination given", http.StatusBadRequest)
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "no SSH destination given"})
 		return
 	}
 	if err := s.remotePCs.ConnectAsync(remotepc.Options{Destination: destination}); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
 	writeJSON(w, http.StatusAccepted, remotePCStatus{Destination: destination, Phase: string(remotepc.PhaseConnecting)})
@@ -45,7 +45,7 @@ func (s *server) handleRemotePCConnect(w http.ResponseWriter, r *http.Request) {
 func (s *server) handleRemotePCStatus(w http.ResponseWriter, r *http.Request) {
 	destination := strings.TrimSpace(r.URL.Query().Get("destination"))
 	if destination == "" {
-		http.Error(w, "no SSH destination given", http.StatusBadRequest)
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "no SSH destination given"})
 		return
 	}
 	session, ok := s.remotePCs.Pending(destination)
@@ -70,7 +70,7 @@ func (s *server) handleRemotePCStatus(w http.ResponseWriter, r *http.Request) {
 				SSHDestination: destination,
 				URL:            session.URL(),
 			}); err != nil {
-				http.Error(w, err.Error(), http.StatusInternalServerError)
+				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 				return
 			}
 		}
@@ -84,7 +84,7 @@ func (s *server) handleRemotePCStatus(w http.ResponseWriter, r *http.Request) {
 func (s *server) handleRemotePCDisconnect(w http.ResponseWriter, r *http.Request) {
 	destination := strings.TrimSpace(r.URL.Query().Get("destination"))
 	if destination == "" {
-		http.Error(w, "no SSH destination given", http.StatusBadRequest)
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "no SSH destination given"})
 		return
 	}
 	// Stops the remote eta too, since its stdin closes with the
@@ -101,19 +101,19 @@ func (s *server) handleRemotePCCleanup(w http.ResponseWriter, r *http.Request) {
 		Destination string `json:"destination"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
-		http.Error(w, "invalid request body", http.StatusBadRequest)
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
 		return
 	}
 	destination := strings.TrimSpace(request.Destination)
 	if destination == "" {
-		http.Error(w, "no SSH destination given", http.StatusBadRequest)
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "no SSH destination given"})
 		return
 	}
 	// Stop first: removing the binary out from under a running process
 	// leaves it running from a deleted file.
 	s.remotePCs.Disconnect(destination)
 	if err := remotepc.Cleanup(r.Context(), destination); err != nil {
-		http.Error(w, err.Error(), http.StatusBadGateway)
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
 		return
 	}
 	if s.peers != nil {

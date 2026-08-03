@@ -73,6 +73,13 @@
           </button>
           <button
             class="icon-button"
+            id="setup-pc-button"
+            title="Set up a PC over SSH"
+          >
+            <i data-lucide="terminal"></i>
+          </button>
+          <button
+            class="icon-button"
             id="theme-button"
             title="Change identity color"
           >
@@ -383,6 +390,47 @@
         <sl-button id="changelog-close">Close</sl-button>
       </div></sl-dialog
     >
+    <sl-dialog id="setup-pc-dialog" label="Set up a PC over SSH">
+      <div class="setup-pc">
+        <p class="setup-pc-intro">
+          Runs Eta on another computer over SSH and adds it as a PC. It works if
+          <code>ssh &lt;name&gt;</code> already works from here, and that
+          computer has Go installed.
+        </p>
+        <!-- A plain input with the same class the Security section uses,
+             not <sl-input>: only alert, button, dialog and spinner are
+             vendored, so an sl-input would silently never upgrade. -->
+        <label class="setup-pc-label" for="setup-pc-destination"
+          >SSH destination</label
+        >
+        <input
+          type="text"
+          id="setup-pc-destination"
+          class="settings-access-input"
+          placeholder="minerva, or pi@minerva"
+          autocomplete="off"
+          spellcheck="false"
+        />
+        <p class="setup-pc-hint">
+          A hostname, <code>user@host</code>, or a name from your
+          <code>~/.ssh/config</code>.
+        </p>
+        <!-- Progress. Hidden until a setup is actually running; the phase
+             line is the status, and the output is only worth showing when
+             something went wrong. -->
+        <div class="setup-pc-progress" id="setup-pc-progress" hidden>
+          <div class="setup-pc-phase">
+            <sl-spinner id="setup-pc-spinner"></sl-spinner>
+            <span id="setup-pc-phase-text">Connecting…</span>
+          </div>
+          <pre class="setup-pc-output" id="setup-pc-output" hidden></pre>
+        </div>
+      </div>
+      <div slot="footer">
+        <sl-button id="setup-pc-cancel">Cancel</sl-button>
+        <sl-button id="setup-pc-start" variant="primary">Set up</sl-button>
+      </div>
+    </sl-dialog>
     <sl-alert id="error-toast" variant="danger" duration="5000" closable
       ><i slot="icon" data-lucide="circle-alert"></i
       ><span id="error-message"></span

@@ -2693,3 +2693,84 @@ body.windowed {
   border-color: rgba(255, 255, 255, 0.32);
   color: #fff;
 }
+
+/* Set up a PC over SSH ---------------------------------------------- */
+.setup-pc {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.setup-pc-intro {
+  margin: 0;
+  color: rgba(255, 255, 255, 0.62);
+  font-size: 13px;
+  line-height: 1.5;
+}
+.setup-pc-label {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: rgba(255, 255, 255, 0.72);
+  margin-bottom: -8px;
+}
+.setup-pc-hint {
+  margin: -8px 0 0;
+  color: rgba(255, 255, 255, 0.5);
+  font-size: 12px;
+  line-height: 1.45;
+}
+.setup-pc-intro code,
+.setup-pc-hint code {
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.08);
+  font-family: var(--mono-font, ui-monospace, monospace);
+  font-size: 12px;
+}
+.setup-pc-progress {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+/* Pairs with the display above: a class rule setting display outranks the
+   UA's [hidden] { display: none }, so hiding these from script would
+   silently do nothing without this. */
+.setup-pc-progress[hidden],
+.setup-pc-output[hidden] {
+  display: none;
+}
+.setup-pc-phase {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  /* Longhand, not the font: shorthand, which resets line-height to
+     normal and drops the text off centre next to the spinner. */
+  font-size: 13px;
+  line-height: 1.4;
+  color: rgba(255, 255, 255, 0.86);
+}
+.setup-pc-phase sl-spinner {
+  --track-width: 2px;
+  font-size: 15px;
+  flex: 0 0 auto;
+}
+.setup-pc-phase sl-spinner[hidden] {
+  display: none;
+}
+.setup-pc-output {
+  margin: 0;
+  max-height: 220px;
+  /* The <pre> is the only scroller: giving it a height and letting it
+     scroll keeps the dialog's own footer where it belongs. */
+  overflow: auto;
+  padding: 10px 12px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.32);
+  color: rgba(255, 255, 255, 0.72);
+  font-family: var(--mono-font, ui-monospace, monospace);
+  font-size: 12px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+}

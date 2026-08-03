@@ -3886,6 +3886,145 @@ $("#add-peer-button").addEventListener("click", async () => {
     showToast((error as Error).message);
   }
 });
+// ── Set up a PC over SSH ─────────────────────────────────────────
+type RemotePCStatus = {
+  destination: string;
+  phase: string;
+  url?: string;
+  error?: string;
+  recent?: string[];
+};
+
+// Wording per phase. The server's phases are terse and mechanical; these
+// say what is happening to someone who did not write it.
+const SETUP_PHASE_TEXT: Record<string, string> = {
+  connecting: "Connecting over SSH…",
+  checking: "Checking what's there…",
+  installing:
+    "Installing Eta (first time on a PC builds it, so this can take a few minutes)…",
+  starting: "Starting Eta…",
+  ready: "Connected.",
+  failed: "Failed.",
+  disconnected: "Not connected.",
+};
+
+let setupPolling = false;
+
+function setupPCReset() {
+  $("#setup-pc-progress").hidden = true;
+  $("#setup-pc-output").hidden = true;
+  $("#setup-pc-output").textContent = "";
+  ($("#setup-pc-start") as any).disabled = false;
+  ($("#setup-pc-destination") as any).disabled = false;
+}
+
+// Polls until the PC is up or has failed. The first connect compiles Eta
+// on that machine, so this can legitimately run for minutes — which is
+// why the server hands back a phase to poll rather than holding a request
+// open for the whole thing.
+async function setupPCPoll(destination: string) {
+  setupPolling = true;
+  try {
+    while (setupPolling) {
+      const status: RemotePCStatus = await api(
+        `/api/remote-pc?destination=${encodeURIComponent(destination)}`,
+      );
+      $("#setup-pc-phase-text").textContent =
+        SETUP_PHASE_TEXT[status.phase] ?? status.phase;
+
+      if (status.phase === "ready") {
+        ($("#setup-pc-spinner") as HTMLElement).hidden = true;
+        // It is a peer like any other now, so the rest of the UI needs
+        // no knowledge of how it got here.
+        enrolledPeers = await api("/api/peers");
+        refreshTaskStrip();
+        showToast(`${destination} is ready`, "success");
+        ($("#setup-pc-dialog") as any).hide();
+        setupPCReset();
+        return;
+      }
+
+      if (status.phase === "failed" || status.error) {
+        ($("#setup-pc-spinner") as HTMLElement).hidden = true;
+        $("#setup-pc-phase-text").textContent =
+          status.error ?? "Could not set up that PC.";
+        // The remote's own output, shown only on failure: it is the
+        // difference between "it didn't work" and "Go isn't installed".
+        if (status.recent?.length) {
+          $("#setup-pc-output").textContent = status.recent.join("\n");
+          $("#setup-pc-output").hidden = false;
+        }
+        ($("#setup-pc-start") as any).disabled = false;
+        ($("#setup-pc-destination") as any).disabled = false;
+        return;
+      }
+
+      // The PC vanished from the server's view without ever reporting a
+      // failure — treat it as one rather than polling forever.
+      if (status.phase === "disconnected") {
+        ($("#setup-pc-spinner") as HTMLElement).hidden = true;
+        $("#setup-pc-phase-text").textContent = "The connection ended.";
+        ($("#setup-pc-start") as any).disabled = false;
+        ($("#setup-pc-destination") as any).disabled = false;
+        return;
+      }
+
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+    }
+  } catch (error) {
+    ($("#setup-pc-spinner") as HTMLElement).hidden = true;
+    $("#setup-pc-phase-text").textContent = (error as Error).message;
+    ($("#setup-pc-start") as any).disabled = false;
+    ($("#setup-pc-destination") as any).disabled = false;
+  } finally {
+    setupPolling = false;
+  }
+}
+
+$("#setup-pc-button").addEventListener("click", () => {
+  setupPCReset();
+  ($("#setup-pc-destination") as any).value = "";
+  ($("#setup-pc-dialog") as any).show();
+});
+
+$("#setup-pc-cancel").addEventListener("click", () => {
+  // Stops watching, but deliberately does not tear down a setup already
+  // in flight: closing a dialog should not abandon a PC halfway through
+  // installing. Reopening and entering the same name picks the same
+  // session back up, because the server keeps one per destination.
+  setupPolling = false;
+  ($("#setup-pc-dialog") as any).hide();
+  setupPCReset();
+});
+
+$("#setup-pc-start").addEventListener("click", async () => {
+  const destination = (($("#setup-pc-destination") as any).value ?? "").trim();
+  if (!destination) return;
+
+  ($("#setup-pc-start") as any).disabled = true;
+  ($("#setup-pc-destination") as any).disabled = true;
+  ($("#setup-pc-spinner") as HTMLElement).hidden = false;
+  $("#setup-pc-output").hidden = true;
+  $("#setup-pc-output").textContent = "";
+  $("#setup-pc-phase-text").textContent = SETUP_PHASE_TEXT.connecting;
+  $("#setup-pc-progress").hidden = false;
+
+  try {
+    await api("/api/remote-pc", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ destination }),
+    });
+  } catch (error) {
+    ($("#setup-pc-spinner") as HTMLElement).hidden = true;
+    $("#setup-pc-phase-text").textContent = (error as Error).message;
+    ($("#setup-pc-start") as any).disabled = false;
+    ($("#setup-pc-destination") as any).disabled = false;
+    return;
+  }
+  void setupPCPoll(destination);
+});
+
 $("#theme-button").addEventListener("click", () => $("#theme-dialog").show());
 
 // ── Settings dialog: Security (access password) ─────────────────────────
