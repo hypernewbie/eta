@@ -226,6 +226,9 @@ func TestRemotePCSetupPopulatesPeerIdentityOnReady(t *testing.T) {
 	if after.ID == "" || after.Accent == "" || after.Glyph == "" {
 		t.Errorf("peer identity fields must all be populated, got %+v", after)
 	}
+	if after.Verifier != s.access.EncodedVerifier() {
+		t.Errorf("expected verifier %q, got %q", s.access.EncodedVerifier(), after.Verifier)
+	}
 
 	// A reconnect on the same destination must also probe, not
 	// preserve from the previous record. The URL is per-session,

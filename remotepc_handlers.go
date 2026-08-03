@@ -103,6 +103,7 @@ func (s *server) handleRemotePCStatus(w http.ResponseWriter, r *http.Request) {
 				peer := peers.Peer{
 					SSHDestination: destination,
 					URL:            session.URL(),
+					Verifier:       s.access.EncodedVerifier(),
 				}
 				// The browser renders each peer with peer.name.toUpperCase()
 				// and the destination-stamped accent and glyph (see
