@@ -103,6 +103,25 @@ type Peer = {
   // session, so anything that must survive a reconnect keys on this.
   ssh_destination?: string;
 };
+
+// A peer record in the wild may be missing name/id/accent/glyph — the
+// current server populates them, but anything stored before that landed
+// has empty fields and the browser would crash on peer.name.toUpperCase()
+// in refreshEtaMenu and desktopIconModel. Every render site that touches
+// these goes through the helpers below, so an old record renders
+// something rather than blanking the desktop and the η menu.
+function peerDisplayName(peer: Peer): string {
+  if (peer.name) return peer.name;
+  if (peer.ssh_destination) return peer.ssh_destination;
+  try {
+    return new URL(peer.url).hostname;
+  } catch {
+    return "?";
+  }
+}
+function peerDisplayGlyph(peer: Peer): string {
+  return peer.glyph || "𓈖";
+}
 type Entry = {
   name: string;
   path: string;
@@ -644,7 +663,7 @@ async function reauthenticatePeer(peerURL: string): Promise<boolean> {
   if (inFlight) return inFlight;
   const attempt = (async () => {
     const known = enrolledPeers.find((candidate) => candidate.url === peerURL);
-    const label = known ? known.name.toUpperCase() : peerURL;
+    const label = known ? peerDisplayName(known).toUpperCase() : peerURL;
     const password = window.prompt(
       `${label} now requires its access password:`,
     );
@@ -848,7 +867,7 @@ function refreshEtaMenu() {
   const local = `<button type="button" class="eta-location eta-location-local" data-location="local"><span class="eta-location-glyph">${escapeHTML(localHost.glyph)}</span><span>${escapeHTML(localHost.hostname.toUpperCase())}</span></button>`;
   const peers = enrolledPeers.map(
     (peer) =>
-      `<button type="button" class="eta-location" style="--pc-accent:${escapeHTML(COLORS[peer.accent]?.accent || "#7c6af7")}" data-location="${escapeHTML(peer.url)}"><span class="eta-location-glyph">${escapeHTML(peer.glyph)}</span><span>${escapeHTML(peer.name.toUpperCase())}</span></button>`,
+      `<button type="button" class="eta-location" style="--pc-accent:${escapeHTML(COLORS[peer.accent]?.accent || "#7c6af7")}" data-location="${escapeHTML(peer.url)}"><span class="eta-location-glyph">${escapeHTML(peerDisplayGlyph(peer))}</span><span>${escapeHTML(peerDisplayName(peer).toUpperCase())}</span></button>`,
   );
   $("#eta-menu-locations").innerHTML = [local, ...peers].join("");
 }
@@ -1032,7 +1051,7 @@ async function openExplorerWindow(
   // with the owning host's glyph alone; navigate() retitles it to the
   // current folder as soon as roots and the listing land. This placeholder
   // is only visible during that first load, or if the load fails.
-  const title = `${peer ? peer.glyph : localHost.glyph} …`;
+  const title = `${peer ? peerDisplayGlyph(peer) : localHost.glyph} …`;
   const panel = createExplorerPanel();
   const view = createExplorerView(key, panel);
   view.state.peer = peer;
@@ -1244,7 +1263,7 @@ function renderTabStrip(view: ExplorerView) {
         tab.path === ""
           ? "/"
           : tab.path.split("/").filter(Boolean).pop() || "/";
-      const peerTag = tab.peer ? ` · ${tab.peer.glyph}` : "";
+      const peerTag = tab.peer ? ` · ${peerDisplayGlyph(tab.peer)}` : "";
       const active = idx === activeIdx ? " tab-active" : "";
       const close =
         tabs.length > 1
@@ -1511,7 +1530,7 @@ async function openTerminalWindow(target: TerminalTarget) {
       ? `vim — ${target.label}`
       : `Terminal — ${target.label}`;
   const title = target.peer
-    ? `${target.peer.glyph} ${label}`
+    ? `${peerDisplayGlyph(target.peer)} ${label}`
     : hostWindowTitle(label);
   const panel = document.createElement("section");
   panel.className = "terminal-panel";
@@ -1728,7 +1747,7 @@ async function openInspector(
   };
   const peer = view.state.peer;
   const title = peer
-    ? `${peer.glyph} ${entry.name}`
+    ? `${peerDisplayGlyph(peer)} ${entry.name}`
     : hostWindowTitle(entry.name);
   const windowFocused = () => {
     activeWindowKey = key;
@@ -3027,12 +3046,13 @@ function desktopIconModel(roots: Root[]): DesktopIcon[] {
     removable: false,
   });
   for (const peer of enrolledPeers) {
+    const label = peerDisplayName(peer).toUpperCase();
     icons.push({
       id: `computer:${peer.url}`,
-      label: peer.name.toUpperCase(),
-      title: peer.name.toUpperCase(),
+      label,
+      title: label,
       peer,
-      art: { glyph: peer.glyph },
+      art: { glyph: peerDisplayGlyph(peer) },
       open: () => void openExplorerWindow(undefined, peer),
       removable: false,
     });
@@ -3127,7 +3147,10 @@ type TmuxHost = {
 // on a timer would mean a burst of requests to every PC forever.
 function peerIdentityFingerprint(list: Peer[]) {
   return list
-    .map((peer) => `${peer.url}|${peer.name}|${peer.accent}|${peer.glyph}`)
+    .map(
+      (peer) =>
+        `${peer.url}|${peerDisplayName(peer)}|${peer.accent}|${peerDisplayGlyph(peer)}`,
+    )
     .join("\n");
 }
 async function refreshPeerIdentities() {
@@ -3173,8 +3196,8 @@ function tmuxHosts(): { peer: Peer | null; label: string; glyph: string }[] {
     },
     ...enrolledPeers.map((peer) => ({
       peer,
-      label: peer.name.toUpperCase(),
-      glyph: peer.glyph,
+      label: peerDisplayName(peer).toUpperCase(),
+      glyph: peerDisplayGlyph(peer),
     })),
   ];
 }
@@ -3578,7 +3601,10 @@ $("#desktop-context-menu").addEventListener("click", async (event) => {
     const peer = desktopIconIndex.get(key)?.peer;
     if (!peer) return;
     if (await reauthenticatePeer(peer.url)) {
-      showToast(`Updated the password Eta uses for ${peer.name}`, "success");
+      showToast(
+        `Updated the password Eta uses for ${peerDisplayName(peer)}`,
+        "success",
+      );
     }
     return;
   }
@@ -3601,7 +3627,7 @@ $("#desktop-context-menu").addEventListener("click", async (event) => {
         `/api/remote-pc?destination=${encodeURIComponent(peer.ssh_destination)}`,
         { method: "DELETE" },
       );
-      showToast(`Disconnected ${peer.name}`, "success");
+      showToast(`Disconnected ${peerDisplayName(peer)}`, "success");
     } catch (error) {
       showToast((error as Error).message);
     }
@@ -3859,7 +3885,7 @@ async function removePeer(peer: Peer) {
   // shortcut the user pinned on purpose would be a worse surprise than
   // that toast.
   refreshTaskStrip();
-  showToast(`Removed ${peer.name}`, "success");
+  showToast(`Removed ${peerDisplayName(peer)}`, "success");
 }
 // Re-fetches this machine's root list for every open local Explorer
 // window (peer windows have their own peer's roots, untouched by a
@@ -3899,7 +3925,7 @@ async function afterPeerAdded(peer: Peer) {
   }
   // Rebuilds the dock, the computers menu and the desktop icons.
   refreshTaskStrip();
-  showToast(`Added ${peer.name}`, "success");
+  showToast(`Added ${peerDisplayName(peer)}`, "success");
 }
 // A bare hostname is the common case ("minerva", not
 // "http://minerva:7080") — Eta always listens on 7080 by default, so
