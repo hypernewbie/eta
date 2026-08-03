@@ -2699,6 +2699,7 @@ async function boot() {
     // that is switched off must not hold up the desktop. Colours correct
     // themselves a moment after load instead.
     void refreshPeerIdentities();
+    void checkPeerStatuses();
     const restored = await loadDesktopState();
     restoringDesktop = true;
     const explorers = restored.filter((window) => window.kind === "explorer");
@@ -3038,7 +3039,33 @@ const peerConnectionStatus = new Map<
 >();
 function isPeerOnline(peer: Peer | null): boolean {
   if (!peer) return true;
-  return peerConnectionStatus.get(peer.url) !== "offline";
+  const status = peerConnectionStatus.get(peer.url);
+  if (status !== undefined) return status === "online";
+  if (peer.ssh_destination) return false;
+  return true;
+}
+
+async function checkPeerStatuses() {
+  for (const peer of enrolledPeers) {
+    try {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 2500);
+      const res = await fetch(
+        `/api/remote/roots?peer=${encodeURIComponent(peer.url)}`,
+        { signal: controller.signal },
+      );
+      clearTimeout(timer);
+      if (res.ok) {
+        peerConnectionStatus.set(peer.url, "online");
+      } else {
+        peerConnectionStatus.set(peer.url, "offline");
+      }
+    } catch {
+      peerConnectionStatus.set(peer.url, "offline");
+    }
+  }
+  refreshTaskStrip();
+  void renderDesktopIcons();
 }
 
 type DesktopIconArt = { glyph: string } | { lucide: string };
