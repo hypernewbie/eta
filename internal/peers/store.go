@@ -25,6 +25,13 @@ type Peer struct {
 	// a password is just another client who knows it, and this is how
 	// this server proves it does too, without asking again each time.
 	Verifier string `json:"verifier,omitempty"`
+	// SSHDestination, when set, means this PC is reached by running eta on
+	// it over SSH rather than by talking to one already listening. It is
+	// what the user typed and what ssh resolves, and it is this peer's
+	// durable identity: URL holds an ephemeral forwarded loopback port
+	// that changes on every reconnect, so it cannot be the key. Empty for
+	// an ordinary peer, and absent from older inventories.
+	SSHDestination string `json:"ssh_destination,omitempty"`
 }
 type Store struct {
 	path string
@@ -96,6 +103,68 @@ func (s *Store) Update(peer Peer) error {
 		}
 	}
 	return fmt.Errorf("unknown peer")
+}
+
+// FindBySSHDestination looks a peer up by the identity that survives
+// reconnects, rather than by its current URL.
+func (s *Store) FindBySSHDestination(destination string) (Peer, bool, error) {
+	if destination == "" {
+		return Peer{}, false, nil
+	}
+	items, err := s.List()
+	if err != nil {
+		return Peer{}, false, err
+	}
+	for _, peer := range items {
+		if peer.SSHDestination == destination {
+			return peer, true, nil
+		}
+	}
+	return Peer{}, false, nil
+}
+
+// UpsertBySSHDestination records an SSH-backed peer, matching on its
+// destination so a reconnect updates the existing entry's URL in place
+// instead of adding a second one. Keying on URL cannot do this: the
+// forwarded port differs every session, so each reconnect would append a
+// new entry and strand the old one pointing at a closed port — or worse,
+// at a port now serving a different tunnel.
+func (s *Store) UpsertBySSHDestination(peer Peer) error {
+	if peer.SSHDestination == "" {
+		return fmt.Errorf("peer has no SSH destination")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	peer.URL = strings.TrimSuffix(peer.URL, "/")
+	list, err := s.list()
+	if err != nil {
+		return err
+	}
+	for i := range list {
+		if list[i].SSHDestination == peer.SSHDestination {
+			// Preserve anything the caller didn't supply: a reconnect
+			// knows the new URL but not necessarily the identity fields
+			// filled in by a later identity probe.
+			if peer.Name == "" {
+				peer.Name = list[i].Name
+			}
+			if peer.ID == "" {
+				peer.ID = list[i].ID
+			}
+			if peer.Accent == "" {
+				peer.Accent = list[i].Accent
+			}
+			if peer.Glyph == "" {
+				peer.Glyph = list[i].Glyph
+			}
+			if peer.Verifier == "" {
+				peer.Verifier = list[i].Verifier
+			}
+			list[i] = peer
+			return s.save(list)
+		}
+	}
+	return s.save(append(list, peer))
 }
 
 func (s *Store) Find(raw string) (Peer, bool, error) {

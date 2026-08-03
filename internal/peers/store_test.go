@@ -1,6 +1,7 @@
 package peers
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 )
@@ -46,5 +47,126 @@ func TestUpdateReplacesIdentityInPlace(t *testing.T) {
 	}
 	if err := store.Update(Peer{URL: "http://absent:7080"}); err == nil {
 		t.Error("updating an unknown peer should fail")
+	}
+}
+
+// TestUpsertBySSHDestinationRewritesTheURLInPlace is the reason
+// SSHDestination exists: an SSH-backed peer's URL is a forwarded
+// loopback port that differs every session, so keying on URL would append
+// a new entry per reconnect and leave the old one pointing at a closed
+// port -- or at a port since taken by a different tunnel.
+func TestUpsertBySSHDestinationRewritesTheURLInPlace(t *testing.T) {
+	s := New(filepath.Join(t.TempDir(), "peers.json"))
+	if err := s.UpsertBySSHDestination(Peer{
+		SSHDestination: "pi@minerva",
+		URL:            "http://127.0.0.1:41001",
+		Name:           "MINERVA",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// A reconnect: same PC, new tunnel port, and the caller does not
+	// resupply identity.
+	if err := s.UpsertBySSHDestination(Peer{
+		SSHDestination: "pi@minerva",
+		URL:            "http://127.0.0.1:52002",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	list, err := s.List()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(list) != 1 {
+		t.Fatalf("expected one entry after a reconnect, got %d: %+v", len(list), list)
+	}
+	if list[0].URL != "http://127.0.0.1:52002" {
+		t.Errorf("URL was not rewritten to the new tunnel port: %q", list[0].URL)
+	}
+	if list[0].Name != "MINERVA" {
+		t.Errorf("identity the reconnect did not resupply was lost: %+v", list[0])
+	}
+}
+
+func TestUpsertBySSHDestinationKeepsDistinctPCsSeparate(t *testing.T) {
+	s := New(filepath.Join(t.TempDir(), "peers.json"))
+	for _, dest := range []string{"minerva", "pi@nas", "workshop"} {
+		if err := s.UpsertBySSHDestination(Peer{SSHDestination: dest, URL: "http://127.0.0.1:41001"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	list, err := s.List()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(list) != 3 {
+		t.Fatalf("expected three distinct PCs, got %d: %+v", len(list), list)
+	}
+}
+
+// An SSH-backed peer must not collide with an ordinary one that happens to
+// share a URL, since the tunnel port is arbitrary and could match anything.
+func TestUpsertBySSHDestinationLeavesOrdinaryPeersAlone(t *testing.T) {
+	s := New(filepath.Join(t.TempDir(), "peers.json"))
+	if err := s.Add(Peer{URL: "http://127.0.0.1:41001", Name: "ORDINARY"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.UpsertBySSHDestination(Peer{
+		SSHDestination: "minerva",
+		URL:            "http://127.0.0.1:41001",
+		Name:           "SSH-BACKED",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	list, err := s.List()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(list) != 2 {
+		t.Fatalf("expected the ordinary peer to survive alongside the SSH-backed one, got %d: %+v", len(list), list)
+	}
+}
+
+func TestFindBySSHDestination(t *testing.T) {
+	s := New(filepath.Join(t.TempDir(), "peers.json"))
+	if err := s.UpsertBySSHDestination(Peer{SSHDestination: "minerva", URL: "http://127.0.0.1:41001"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, err := s.FindBySSHDestination("minerva"); err != nil || !ok {
+		t.Fatalf("expected to find the peer, ok=%v err=%v", ok, err)
+	}
+	if _, ok, _ := s.FindBySSHDestination("someone-else"); ok {
+		t.Error("found a destination that was never recorded")
+	}
+	// An ordinary peer has no destination, so an empty lookup must not
+	// match it.
+	if err := s.Add(Peer{URL: "http://eta-b:7080"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, _ := s.FindBySSHDestination(""); ok {
+		t.Error("an empty destination matched a peer that has none")
+	}
+}
+
+func TestUpsertBySSHDestinationRefusesAnEmptyDestination(t *testing.T) {
+	s := New(filepath.Join(t.TempDir(), "peers.json"))
+	if err := s.UpsertBySSHDestination(Peer{URL: "http://127.0.0.1:41001"}); err == nil {
+		t.Fatal("expected an error: without a destination there is no identity to key on")
+	}
+}
+
+// Older inventories have no ssh_destination field at all, and must load
+// unchanged rather than being treated as SSH-backed.
+func TestPeersWithoutAnSSHDestinationLoadAsOrdinary(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "peers.json")
+	if err := os.WriteFile(path, []byte(`[{"url":"http://eta-b:7080","name":"B"}]`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	list, err := New(path).List()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(list) != 1 || list[0].SSHDestination != "" {
+		t.Fatalf("expected one ordinary peer, got %+v", list)
 	}
 }
