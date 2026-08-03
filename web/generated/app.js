@@ -4,17 +4,32 @@
 // in refreshEtaMenu and desktopIconModel. Every render site that touches
 // these goes through the helpers below, so an old record renders
 // something rather than blanking the desktop and the η menu.
+function stripLocalSuffix(name) {
+    if (!name)
+        return name;
+    if (name.toLowerCase().endsWith(".local")) {
+        return name.slice(0, -6);
+    }
+    return name;
+}
+function localHostDisplayName() {
+    return stripLocalSuffix(localHost.hostname || "local");
+}
 function peerDisplayName(peer) {
+    let name = "";
     if (peer.name)
-        return peer.name;
-    if (peer.ssh_destination)
-        return peer.ssh_destination;
-    try {
-        return new URL(peer.url).hostname;
+        name = peer.name;
+    else if (peer.ssh_destination)
+        name = peer.ssh_destination;
+    else {
+        try {
+            name = new URL(peer.url).hostname;
+        }
+        catch {
+            name = "?";
+        }
     }
-    catch {
-        return "?";
-    }
+    return stripLocalSuffix(name);
 }
 function peerDisplayGlyph(peer) {
     return peer.glyph || "𓈖";
@@ -646,7 +661,7 @@ async function loadCopyTasks() {
     }
 }
 function refreshEtaMenu() {
-    const local = `<button type="button" class="eta-location eta-location-local" data-location="local"><span class="eta-location-glyph">${escapeHTML(localHost.glyph)}</span><span>${escapeHTML(localHost.hostname.toUpperCase())}</span></button>`;
+    const local = `<button type="button" class="eta-location eta-location-local" data-location="local"><span class="eta-location-glyph">${escapeHTML(localHost.glyph)}</span><span>${escapeHTML(localHostDisplayName().toUpperCase())}</span></button>`;
     const peers = enrolledPeers.map((peer) => `<button type="button" class="eta-location" style="--pc-accent:${escapeHTML(COLORS[peer.accent]?.accent || "#7c6af7")}" data-location="${escapeHTML(peer.url)}"><span class="eta-location-glyph">${escapeHTML(peerDisplayGlyph(peer))}</span><span>${escapeHTML(peerDisplayName(peer).toUpperCase())}</span></button>`);
     $("#eta-menu-locations").innerHTML = [local, ...peers].join("");
 }
@@ -2687,8 +2702,8 @@ function desktopIconModel(roots) {
     // Computers first, then the folders on them.
     icons.push({
         id: "computer:local",
-        label: localHost.hostname.toUpperCase(),
-        title: localHost.hostname.toUpperCase(),
+        label: localHostDisplayName().toUpperCase(),
+        title: localHostDisplayName().toUpperCase(),
         peer: null,
         art: { glyph: localHost.glyph },
         open: () => void openExplorerWindow(),
@@ -2827,7 +2842,7 @@ function tmuxHosts() {
     return [
         {
             peer: null,
-            label: localHost.hostname.toUpperCase(),
+            label: localHostDisplayName().toUpperCase(),
             glyph: localHost.glyph,
         },
         ...enrolledPeers.map((peer) => ({
@@ -4052,7 +4067,7 @@ function populateSettingsMachineDropdown() {
     const select = $("#settings-machine-select");
     if (!select)
         return;
-    const localOpt = `<option value="local">LOCAL (${escapeHTML(localHost.hostname.toUpperCase())})</option>`;
+    const localOpt = `<option value="local">LOCAL (${escapeHTML(localHostDisplayName().toUpperCase())})</option>`;
     const peerOpts = enrolledPeers.map((p) => `<option value="${escapeHTML(p.url)}">${escapeHTML(peerDisplayName(p).toUpperCase())}</option>`);
     select.innerHTML = [localOpt, ...peerOpts].join("");
     select.value = activeSettingsMachineKey;
