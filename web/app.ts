@@ -3949,6 +3949,9 @@ type RemotePCStatus = {
   destination: string;
   phase: string;
   url?: string;
+  // Eta was already running on that PC and this just connected to it,
+  // rather than installing and starting one.
+  adopted?: boolean;
   error?: string;
   recent?: string[];
 };
@@ -3996,7 +3999,15 @@ async function setupPCPoll(destination: string) {
         // no knowledge of how it got here.
         enrolledPeers = await api("/api/peers");
         refreshTaskStrip();
-        showToast(`${destination} is ready`, "success");
+        // Worth distinguishing: it explains why setup was instant, and
+        // it means disconnecting will leave that Eta running, because
+        // this computer never started it.
+        showToast(
+          status.adopted
+            ? `Connected to the Eta already running on ${destination}`
+            : `${destination} is ready`,
+          "success",
+        );
         ($("#setup-pc-dialog") as any).hide();
         setupPCReset();
         return;

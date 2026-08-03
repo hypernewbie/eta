@@ -52,7 +52,15 @@ const (
 	// connect compiles from source, later ones hit Go's build cache.
 	establishTimeout = 10 * time.Minute
 	detectTimeout    = 30 * time.Second
-	recentLines      = 40
+	// Short: this only asks whether something is already answering, and a
+	// PC that isn't running eta must not be made to wait for the real
+	// work to start.
+	adoptTimeout = 12 * time.Second
+	recentLines  = 40
+	// eta's own default port. An eta already running on a PC is almost
+	// always on this, because that is what starting it with no flags
+	// gives you.
+	defaultRemotePort = 7080
 )
 
 // shell is which command language the remote's ssh session speaks. Only
@@ -78,6 +86,7 @@ type Session struct {
 	destination string
 	url         string
 	localPort   int
+	adopted     bool
 	cmd         *exec.Cmd
 	stdin       io.Closer
 
@@ -95,6 +104,12 @@ func (s *Session) URL() string { return s.url }
 
 // Destination is the stable identity: unchanged between sessions.
 func (s *Session) Destination() string { return s.destination }
+
+// Adopted reports that this session attached to an eta that was already
+// running on that PC, rather than installing and starting one. An
+// adopted eta is not ours: nothing was installed for it, and ending the
+// session leaves it running.
+func (s *Session) Adopted() bool { return s.adopted }
 
 func (s *Session) Phase() Phase {
 	s.mu.Lock()
@@ -129,6 +144,17 @@ func (s *Session) record(line string) {
 func (s *Session) Stop() {
 	if s.stdin != nil {
 		_ = s.stdin.Close()
+	}
+	// An adopted session runs no remote command, so there is nothing on
+	// the far side to shut down gracefully and nothing to wait for. Only
+	// the tunnel goes; the eta it reached keeps running, because this
+	// computer never started it.
+	if s.adopted {
+		if s.cmd != nil && s.cmd.Process != nil {
+			_ = s.cmd.Process.Kill()
+		}
+		<-s.exited
+		return
 	}
 	select {
 	case <-s.exited:
@@ -182,6 +208,14 @@ func validateDestination(destination string) error {
 //     local bind leaves ssh running and the health check succeeds
 //     against whatever else owns that port.
 func sshArgs(destination string, forward string) ([]string, error) {
+	return sshArgsMode(destination, forward, false)
+}
+
+// sshArgsMode adds -N for a tunnel that runs no remote command at all.
+// That is what adopting an already-running eta needs, and it is why
+// adopting works on a PC whose ssh shell this package could not otherwise
+// use: with no command to run, the shell never matters.
+func sshArgsMode(destination string, forward string, tunnelOnly bool) ([]string, error) {
 	if err := validateDestination(destination); err != nil {
 		return nil, err
 	}
@@ -190,6 +224,9 @@ func sshArgs(destination string, forward string) ([]string, error) {
 		"-o", "ConnectTimeout=10",
 		"-o", "ServerAliveInterval=15",
 		"-T",
+	}
+	if tunnelOnly {
+		args = append(args, "-N")
 	}
 	if forward != "" {
 		args = append(args, "-o", "ExitOnForwardFailure=yes", "-L", forward)
@@ -342,13 +379,143 @@ func Start(ctx context.Context, opts Options) (*Session, error) {
 	return session, nil
 }
 
-// Begin detects the remote's shell and starts installing and running eta
-// there, returning as soon as the ssh process is spawned — before it is
-// ready. Callers reporting progress need the session while it converges:
-// a first connect compiles from source and can take minutes, and a
-// session that only exists once it works cannot be observed getting
-// there.
+// Begin connects to a PC, returning as soon as the ssh process is
+// spawned — before it is ready. Callers reporting progress need the
+// session while it converges: a first install compiles from source and
+// can take minutes, and a session that only exists once it works cannot
+// be observed getting there.
+//
+// An eta already running on that PC is adopted rather than replaced. That
+// is checked first, and if it answers, nothing is installed and nothing
+// is started — see adopt.
 func Begin(ctx context.Context, opts Options) (*Session, error) {
+	if err := validateDestination(opts.Destination); err != nil {
+		return nil, err
+	}
+	if session, ok := adopt(ctx, opts.Destination); ok {
+		return session, nil
+	}
+	return install(ctx, opts)
+}
+
+// adopt attaches to an eta already listening on that PC, by forwarding to
+// its port and asking it directly. It returns false if nothing answers,
+// leaving the caller to install one.
+//
+// This exists so that a PC someone already started eta on is connected
+// to, not competed with. Without it, setting such a PC up would install
+// over the running one's binary and start a second instance beside it,
+// leaving two etas on one machine and the user's own no longer the one
+// being talked to.
+//
+// The tunnel runs no remote command (-N), which has three consequences,
+// all wanted:
+//
+//   - Nothing is installed and nothing is started, so an eta installed by
+//     any other means -- a package, a service, a manual build -- is
+//     adopted just as happily as one this package installed.
+//   - Ending the session closes only the tunnel. The adopted eta keeps
+//     running, because it was never ours to stop.
+//   - It needs no shell on the far side, so this works even on a PC whose
+//     ssh shell this package would otherwise refuse.
+//
+// Whether it is really eta answering is decided by asking it, not by
+// finding something bound to the port: anything at all can be listening
+// on 7080, and only eta answers its own health endpoint.
+func adopt(ctx context.Context, destination string) (*Session, bool) {
+	localPort, err := freeLocalPort()
+	if err != nil {
+		return nil, false
+	}
+	args, err := sshArgsMode(destination,
+		fmt.Sprintf("127.0.0.1:%d:127.0.0.1:%d", localPort, defaultRemotePort), true)
+	if err != nil {
+		return nil, false
+	}
+	if _, err := exec.LookPath(sshBinary); err != nil {
+		return nil, false
+	}
+
+	cmd := exec.Command(sshBinary, args...)
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		return nil, false
+	}
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return nil, false
+	}
+	stderr, err := cmd.StderrPipe()
+	if err != nil {
+		return nil, false
+	}
+	if err := cmd.Start(); err != nil {
+		return nil, false
+	}
+
+	session := &Session{
+		destination: destination,
+		url:         "http://127.0.0.1:" + strconv.Itoa(localPort),
+		localPort:   localPort,
+		adopted:     true,
+		phase:       PhaseChecking,
+		cmd:         cmd,
+		stdin:       stdin,
+		exited:      make(chan struct{}),
+	}
+	adoptCtx, cancel := context.WithTimeout(ctx, adoptTimeout)
+	defer cancel()
+
+	var drained sync.WaitGroup
+	drained.Add(2)
+	go func() { defer drained.Done(); session.drain(stdout) }()
+	go func() {
+		defer drained.Done()
+		// Watching for ssh reporting that the forward could not reach
+		// anything, so a PC with no eta running gives up at once instead
+		// of waiting out the timeout. Without this every fresh install
+		// pays the full probe first -- measured at twelve dead seconds
+		// before any work starts.
+		//
+		// The timeout above remains the real bound; this only makes the
+		// common case fast, so a change in ssh's wording costs speed
+		// rather than correctness.
+		scanner := bufio.NewScanner(stderr)
+		for scanner.Scan() {
+			line := strings.TrimSpace(scanner.Text())
+			if line == "" {
+				continue
+			}
+			session.record(line)
+			if strings.Contains(line, "open failed") ||
+				strings.Contains(line, "connect failed") ||
+				strings.Contains(line, "Connection refused") {
+				cancel()
+			}
+		}
+	}()
+	go func() {
+		waitErr := cmd.Wait()
+		drained.Wait()
+		session.mu.Lock()
+		if session.phase != PhaseReady && session.err == nil {
+			session.err = session.failure(waitErr)
+			session.phase = PhaseFailed
+		}
+		session.mu.Unlock()
+		close(session.exited)
+	}()
+
+	if err := session.WaitReady(adoptCtx); err != nil {
+		session.Stop()
+		return nil, false
+	}
+	return session, true
+}
+
+// install is the path for a PC with no eta running on it: put one there
+// and start it, leashed to this connection.
+func install(ctx context.Context, opts Options) (*Session, error) {
 	module, version := opts.Module, opts.Version
 	if module == "" || version == "" {
 		selfModule, selfVersion, err := selfModuleVersion()
@@ -539,6 +706,10 @@ func (s *Session) WaitReady(ctx context.Context) error {
 		}
 	}
 }
+
+// ErrAdopted reports an action that only makes sense for an eta this
+// computer installed, attempted on one that was already running.
+var ErrAdopted = errors.New("eta on that PC was already running and was not installed from here, so there is nothing here to remove")
 
 // Cleanup removes eta's files from a remote. Separate from Stop: stopping
 // is routine, removing isn't.

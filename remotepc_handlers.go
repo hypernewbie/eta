@@ -15,11 +15,16 @@ import (
 // for the whole thing would tie the outcome to one fetch surviving.
 
 type remotePCStatus struct {
-	Destination string   `json:"destination"`
-	Phase       string   `json:"phase"`
-	URL         string   `json:"url,omitempty"`
-	Error       string   `json:"error,omitempty"`
-	Recent      []string `json:"recent,omitempty"`
+	Destination string `json:"destination"`
+	Phase       string `json:"phase"`
+	URL         string `json:"url,omitempty"`
+	// Adopted means eta was already running on that PC and this session
+	// simply connected to it, rather than installing and starting one.
+	// Worth telling the user: it explains why setup was instant, and it
+	// means disconnecting leaves their eta running.
+	Adopted bool     `json:"adopted,omitempty"`
+	Error   string   `json:"error,omitempty"`
+	Recent  []string `json:"recent,omitempty"`
 }
 
 func (s *server) handleRemotePCConnect(w http.ResponseWriter, r *http.Request) {
@@ -56,6 +61,7 @@ func (s *server) handleRemotePCStatus(w http.ResponseWriter, r *http.Request) {
 	status := remotePCStatus{
 		Destination: destination,
 		Phase:       string(session.Phase()),
+		Adopted:     session.Adopted(),
 		Recent:      session.Recent(),
 	}
 	if session.Phase() == remotepc.PhaseReady {
@@ -107,6 +113,15 @@ func (s *server) handleRemotePCCleanup(w http.ResponseWriter, r *http.Request) {
 	destination := strings.TrimSpace(request.Destination)
 	if destination == "" {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "no SSH destination given"})
+		return
+	}
+	// Refused for an eta that was already running there: this computer
+	// did not install it, may not know where it came from, and removing
+	// ~/.eta would either do nothing or delete something it does not own.
+	// Checked before disconnecting, so a refusal does not also drop a
+	// working connection.
+	if session, live := s.remotePCs.Get(destination); live && session.Adopted() {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": remotepc.ErrAdopted.Error()})
 		return
 	}
 	// Stop first: removing the binary out from under a running process

@@ -3538,7 +3538,12 @@ async function setupPCPoll(destination) {
                 // no knowledge of how it got here.
                 enrolledPeers = await api("/api/peers");
                 refreshTaskStrip();
-                showToast(`${destination} is ready`, "success");
+                // Worth distinguishing: it explains why setup was instant, and
+                // it means disconnecting will leave that Eta running, because
+                // this computer never started it.
+                showToast(status.adopted
+                    ? `Connected to the Eta already running on ${destination}`
+                    : `${destination} is ready`, "success");
                 $("#setup-pc-dialog").hide();
                 setupPCReset();
                 return;

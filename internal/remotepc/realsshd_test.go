@@ -315,3 +315,75 @@ func TestRealSSHDCleanupRemovesEverything(t *testing.T) {
 	}
 	_ = strconv.Itoa(fixture.port)
 }
+
+// TestRealSSHDAdoptsAnAlreadyRunningEta is the case where someone already
+// started eta on that PC themselves. It must be connected to, not
+// competed with: installing over it and starting a second instance beside
+// it would leave two etas on one machine, with the user's own no longer
+// the one being talked to.
+//
+// Proven against a real eta on the real default port, reached over a real
+// ssh forward -- and then, after the session ends, still running, because
+// this computer never started it.
+func TestRealSSHDAdoptsAnAlreadyRunningEta(t *testing.T) {
+	fixture := startRealSSHD(t)
+	fixture.use(t)
+
+	// Someone's own eta, already running on the default port. Started
+	// here with no leash at all, exactly as a person running it would.
+	etaBinary := filepath.Join(fixture.fakeHome, ".eta", "bin", "eta")
+	theirs := exec.Command(etaBinary,
+		"--ip", "127.0.0.1",
+		"--port", strconv.Itoa(defaultRemotePort),
+		"--root", t.TempDir(),
+	)
+	theirs.Env = append(os.Environ(),
+		"XDG_CONFIG_HOME="+t.TempDir(),
+		"XDG_CACHE_HOME="+t.TempDir(),
+	)
+	if err := theirs.Start(); err != nil {
+		t.Fatalf("start the already-running eta: %v", err)
+	}
+	defer func() {
+		_ = theirs.Process.Kill()
+		_ = theirs.Wait()
+	}()
+	theirURL := "http://127.0.0.1:" + strconv.Itoa(defaultRemotePort)
+	deadline := time.Now().Add(20 * time.Second)
+	for !answers(theirURL + "/api/healthz") {
+		if time.Now().After(deadline) {
+			t.Skipf("could not start an eta on port %d to adopt; it may be in use", defaultRemotePort)
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+
+	session, err := Start(context.Background(), Options{
+		Destination: "127.0.0.1",
+		Module:      "github.com/hypernewbie/eta",
+		Version:     "v0.0.0-test",
+	})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	if !session.Adopted() {
+		t.Fatal("expected the already-running eta to be adopted, not replaced")
+	}
+	if !answers(session.URL() + "/api/healthz") {
+		t.Fatalf("adopted session is not reachable at %s", session.URL())
+	}
+	// Nothing was installed and nothing was started: the only eta on that
+	// PC is still the one that was already there.
+	if !answers(theirURL + "/api/healthz") {
+		t.Fatal("the already-running eta stopped answering after being adopted")
+	}
+
+	session.Stop()
+
+	// The decisive assertion: ending our session must leave their eta
+	// alone. It was never ours to stop.
+	time.Sleep(500 * time.Millisecond)
+	if !answers(theirURL + "/api/healthz") {
+		t.Fatal("ending the session killed an eta this computer did not start")
+	}
+}

@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -348,5 +349,41 @@ func TestManagerForgetsAnEndedSession(t *testing.T) {
 	}
 	if _, ok := manager.sessions["minerva"]; ok {
 		t.Fatal("the ended session was left in the map")
+	}
+}
+
+// Adopting an already-running eta runs no remote command, which is what
+// -N means. It is also why adopting works on a PC whose ssh shell this
+// package would otherwise refuse: with no command to run, the shell is
+// never involved.
+func TestSSHArgsUsesNoRemoteCommandForATunnelOnlySession(t *testing.T) {
+	tunnel, err := sshArgsMode("minerva", "127.0.0.1:1:127.0.0.1:7080", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Contains(tunnel, "-N") {
+		t.Errorf("expected -N for a tunnel-only session: %v", tunnel)
+	}
+	// And never on the install path, which exists precisely to run one.
+	install, err := sshArgsMode("minerva", "127.0.0.1:1:127.0.0.1:7080", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if slices.Contains(install, "-N") {
+		t.Errorf("-N would stop the install command running at all: %v", install)
+	}
+	// The destination stays last, behind the flag terminator, in both.
+	for _, args := range [][]string{tunnel, install} {
+		if args[len(args)-1] != "minerva" || args[len(args)-2] != "--" {
+			t.Errorf(`expected args to end with ["--", "minerva"], got: %v`, args)
+		}
+	}
+}
+
+// The port adopted is eta's own default, since that is what starting it
+// with no flags gives you, and is where an already-running one will be.
+func TestAdoptTargetsEtasDefaultPort(t *testing.T) {
+	if defaultRemotePort != 7080 {
+		t.Fatalf("expected eta's documented default port, got %d", defaultRemotePort)
 	}
 }
