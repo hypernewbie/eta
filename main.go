@@ -33,6 +33,7 @@ import (
 	"github.com/hypernewbie/eta/internal/diskcache"
 	"github.com/hypernewbie/eta/internal/fileops"
 	"github.com/hypernewbie/eta/internal/hostid"
+	"github.com/hypernewbie/eta/internal/mdns"
 	"github.com/hypernewbie/eta/internal/peers"
 	"github.com/hypernewbie/eta/internal/rangecache"
 	"github.com/hypernewbie/eta/internal/remotefile"
@@ -2060,7 +2061,7 @@ func explainPeerProbe(rawURL string, err error) error {
 		// as "server misbehaving". The resolver is not broken and neither
 		// is the peer: this computer just isn't doing mDNS. Naming that is
 		// the difference between an unactionable error and a fix.
-		if strings.HasSuffix(strings.ToLower(strings.TrimSuffix(host, ".")), ".local") {
+		if mdns.IsLocal(host) {
 			return newAPIError(http.StatusBadRequest, fmt.Sprintf(
 				"Can't look up %q. Names ending in .local are resolved by mDNS, "+
 					"which this computer isn't set up for. Use that PC's IP address "+
@@ -2073,7 +2074,7 @@ func explainPeerProbe(rawURL string, err error) error {
 		return newAPIError(http.StatusBadRequest, fmt.Sprintf(
 			"Couldn't look up %q: this computer's DNS didn't answer. Try its IP address instead.", host))
 	}
-	if errors.Is(err, syscall.ECONNREFUSED) {
+	if isRefused(err) {
 		return newAPIError(http.StatusBadRequest, fmt.Sprintf(
 			"%s refused the connection. Eta doesn't appear to be running there%s.",
 			host, portHint(port)))
@@ -2087,7 +2088,7 @@ func explainPeerProbe(rawURL string, err error) error {
 		return newAPIError(http.StatusBadRequest, fmt.Sprintf(
 			"%s didn't respond in time. It may be off, or a firewall may be blocking it.", where))
 	}
-	if errors.Is(err, syscall.EHOSTUNREACH) || errors.Is(err, syscall.ENETUNREACH) {
+	if isUnreachable(err) {
 		return newAPIError(http.StatusBadRequest, fmt.Sprintf(
 			"%s can't be reached from this computer. Check they're on the same network or VPN.", host))
 	}

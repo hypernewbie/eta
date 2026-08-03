@@ -1,30 +1,32 @@
 // Package mdns resolves .local hostnames over multicast DNS.
 //
 // This exists because Go programs cannot rely on the operating system to
-// do it. RFC 6762 §3 reserves .local for mDNS and says names in it "are
-// link-local" and resolved by multicast, so ordinary unicast DNS servers
-// are expected to refuse them -- which is exactly what a user hitting
-// this sees: systemd-resolved answering SERVFAIL, surfaced by Go as
-// "server misbehaving".
+// do it. RFC 6762 §3 reserves .local for multicast DNS, so ordinary
+// unicast DNS servers are expected to refuse those names -- which is
+// exactly what a user hitting this sees: systemd-resolved answering
+// SERVFAIL, surfaced by Go as "server misbehaving".
 //
-// On Linux the resolution normally happens in NSS, via Avahi's
-// mdns4_minimal module, and Go's pure-Go resolver does not consult NSS
-// modules at all -- it reads /etc/hosts and asks the nameservers in
-// resolv.conf. So `ping jupiter.local` succeeds while the same lookup
-// inside a Go program fails, on a machine that is working correctly. A
-// box without the Avahi NSS module (hosts: files dns) cannot resolve it
-// by any means.
+// On Linux the lookup normally succeeds inside NSS, via Avahi's
+// mdns4_minimal module. Go's pure-Go resolver does not consult NSS
+// modules at all: it reads /etc/hosts and queries the nameservers in
+// resolv.conf (see the net package's "Name Resolution" documentation).
+// So `ping jupiter.local` succeeds while the identical lookup inside a
+// Go program fails on a correctly working machine, and a box with no
+// Avahi NSS module (hosts: files dns) cannot resolve it at all.
 //
 // Eta is a LAN filesystem browser and .local is how LAN machines are
-// named, so it does the multicast query itself rather than depending on
-// each user's resolver being configured for it. The DNS wire format is
-// handled by miekg/dns, the library CoreDNS is built on, rather than
-// hand-rolled here.
+// named, so it queries multicast itself rather than depending on every
+// user's resolver being configured for it.
+//
+// The multicast protocol is github.com/pion/mdns/v2, the resolver
+// pion/webrtc uses for ICE .local candidates -- not hand-rolled here.
+// What this package adds is only what is specific to Eta: deciding which
+// names are multicast names, caching answers across a browse session,
+// and a dialer that applies it to peer traffic.
 package mdns
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"net"
 	"net/netip"
@@ -32,279 +34,152 @@ import (
 	"sync"
 	"time"
 
-	"github.com/miekg/dns"
+	pion "github.com/pion/mdns/v2"
 	"golang.org/x/net/ipv4"
 	"golang.org/x/net/ipv6"
+	"golang.org/x/sync/singleflight"
 )
 
 const (
-	// The mDNS group addresses and port (RFC 6762 §3).
-	ipv4Group = "224.0.0.251"
-	ipv6Group = "ff02::fb"
-	port      = 5353
-
-	// A one-shot query is answered quickly on a healthy LAN; this bounds
-	// the wait when nothing is there to answer at all.
+	// A one-shot query is answered promptly on a healthy link; this
+	// bounds the wait when nothing is there to answer at all.
 	queryTimeout = 2 * time.Second
 
-	// mDNS A records commonly carry a 120s TTL. Clamped so a peer that
-	// moves is not pinned to a stale address for long, and so a
-	// zero-TTL record does not defeat caching entirely.
-	minTTL = 10 * time.Second
-	maxTTL = 2 * time.Minute
+	// How long an answer is trusted. pion reports the record header, but
+	// a fixed modest lifetime is simpler and safer than honouring a TTL
+	// a peer chose: long enough that browsing does not re-query the link
+	// constantly, short enough that a PC which moves is picked up again.
+	cacheFor = 60 * time.Second
 )
 
 // IsLocal reports whether a hostname is in the mDNS .local domain, and so
-// must be resolved by multicast rather than by unicast DNS.
+// must be resolved by multicast rather than unicast DNS.
 func IsLocal(host string) bool {
 	host = strings.TrimSuffix(strings.ToLower(strings.TrimSpace(host)), ".")
-	if host == "" || net.ParseIP(host) != nil {
+	if host == "" {
 		return false
+	}
+	if _, err := netip.ParseAddr(host); err == nil {
+		return false // an address literal is not a name
 	}
 	return strings.HasSuffix(host, ".local")
 }
 
 type entry struct {
-	addrs   []netip.Addr
+	addr    netip.Addr
 	expires time.Time
 }
 
 var (
 	cacheMu sync.Mutex
 	cache   = map[string]entry{}
+
+	// Concurrent first requests for one name would otherwise each open
+	// sockets and query the whole link -- the stampede the cache exists
+	// to prevent, in the window before the first answer lands. A browse
+	// session opens many connections at once, so this is the common case
+	// rather than a rare one.
+	inflight singleflight.Group
 )
 
-// Lookup resolves a .local name to its addresses, preferring a cached
-// answer. Results are cached for the record's own TTL: a browse session
-// makes many requests to one peer, and re-querying the whole link for
-// every one of them would be both slow and antisocial.
-func Lookup(ctx context.Context, host string) ([]netip.Addr, error) {
+// Lookup resolves a .local name to an address, preferring a cached
+// answer. Browsing one peer is thousands of requests, and re-querying
+// the entire link for each of them would be both slow and antisocial.
+func Lookup(ctx context.Context, host string) (netip.Addr, error) {
 	key := strings.ToLower(strings.TrimSuffix(host, "."))
 
 	cacheMu.Lock()
-	if hit, ok := cache[key]; ok && time.Now().Before(hit.expires) {
-		addrs := append([]netip.Addr(nil), hit.addrs...)
+	hit, ok := cache[key]
+	if ok && time.Now().Before(hit.expires) {
 		cacheMu.Unlock()
-		return addrs, nil
+		return hit.addr, nil
+	}
+	if ok {
+		// Expired, and about to be re-queried: drop it now so a name that
+		// stops resolving does not sit in the map forever.
+		delete(cache, key)
 	}
 	cacheMu.Unlock()
 
-	addrs, ttl, err := query(ctx, key)
+	resolved, err, _ := inflight.Do(key, func() (any, error) {
+		addr, err := query(ctx, key)
+		if err != nil {
+			return nil, err
+		}
+		cacheMu.Lock()
+		cache[key] = entry{addr: addr, expires: time.Now().Add(cacheFor)}
+		cacheMu.Unlock()
+		return addr, nil
+	})
 	if err != nil {
-		return nil, err
+		return netip.Addr{}, err
 	}
-	if len(addrs) == 0 {
-		return nil, fmt.Errorf("no mDNS response for %q", host)
-	}
-
-	cacheMu.Lock()
-	cache[key] = entry{addrs: addrs, expires: time.Now().Add(ttl)}
-	cacheMu.Unlock()
-	return addrs, nil
+	return resolved.(netip.Addr), nil
 }
 
-// Forget drops any cached answer for a name. Used when a cached address
-// stops working, so a peer that changed address is re-resolved rather
-// than failing until the TTL runs out.
+// Forget drops any cached answer for a name, so a PC that changed
+// address is re-resolved rather than failing until the entry expires.
 func Forget(host string) {
 	cacheMu.Lock()
 	delete(cache, strings.ToLower(strings.TrimSuffix(host, ".")))
 	cacheMu.Unlock()
 }
 
-// query sends a one-shot mDNS question and collects the answers.
+// query asks the link, using pion/mdns for the protocol itself.
 //
-// The query goes out of every multicast-capable interface rather than
-// only the default route. That matters here specifically: a machine
-// running Eta typically has several (a LAN interface, a Tailscale
-// interface, one or more bridges from container runtimes), and the
-// kernel's default multicast route is frequently not the LAN one.
+// The sockets are opened per lookup and closed again rather than held
+// open for the process's lifetime. Caching makes lookups rare, and Eta
+// has no reason to sit on the mDNS port or to receive the link's
+// multicast traffic while it is not asking anything.
 //
-// Sending from an ephemeral source port rather than 5353 makes this a
-// "legacy" query in RFC 6762 §6.7 terms, which responders answer by
-// unicast straight back to that port. So no group membership is needed
-// to hear the reply, and Eta never joins the group or answers queries --
-// it asks, it does not advertise.
-func query(ctx context.Context, name string) ([]netip.Addr, time.Duration, error) {
-	fqdn := dns.Fqdn(name)
+// No LocalNames are configured, which is pion's condition for answering
+// questions: Eta asks, and never advertises itself or responds on behalf
+// of any name.
+func query(ctx context.Context, name string) (netip.Addr, error) {
+	// net.ListenUDP on a multicast address does not bind the group: the
+	// stdlib rewrites it to the wildcard and sets SO_REUSEADDR (and
+	// SO_REUSEPORT on Darwin/BSD), which is why this coexists with an
+	// avahi-daemon or mDNSResponder already holding 5353. No reuse
+	// options are needed here.
+	var bindErr error
+	var packet4 *ipv4.PacketConn
+	if addr, err := net.ResolveUDPAddr("udp4", pion.DefaultAddressIPv4); err == nil {
+		if conn, err := net.ListenUDP("udp4", addr); err == nil {
+			packet4 = ipv4.NewPacketConn(conn)
+		} else {
+			bindErr = err
+		}
+	}
+	var packet6 *ipv6.PacketConn
+	if addr, err := net.ResolveUDPAddr("udp6", pion.DefaultAddressIPv6); err == nil {
+		if conn, err := net.ListenUDP("udp6", addr); err == nil {
+			packet6 = ipv6.NewPacketConn(conn)
+		} else if bindErr == nil {
+			bindErr = err
+		}
+	}
+	if packet4 == nil && packet6 == nil {
+		// Kept rather than swallowed: on a platform where a resident
+		// responder holds the port exclusively, this is the only thing
+		// that says why, and the caller falls back to the system
+		// resolver on the strength of it.
+		return netip.Addr{}, fmt.Errorf("no multicast socket available for %q: %w", name, bindErr)
+	}
 
-	conn, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4zero, Port: 0})
+	// IncludeLoopback so that an Eta on this same machine, reached by its
+	// own .local name, resolves like any other.
+	server, err := pion.Server(packet4, packet6, &pion.Config{IncludeLoopback: true})
 	if err != nil {
-		return nil, 0, fmt.Errorf("mDNS socket: %w", err)
+		return netip.Addr{}, fmt.Errorf("mDNS query for %q: %w", name, err)
 	}
-	defer conn.Close()
+	defer server.Close() //nolint:errcheck
 
-	conn6, err6 := net.ListenUDP("udp6", &net.UDPAddr{IP: net.IPv6unspecified, Port: 0})
-	if err6 == nil {
-		defer conn6.Close()
-	}
+	queryCtx, cancel := context.WithTimeout(ctx, queryTimeout)
+	defer cancel()
 
-	deadline := time.Now().Add(queryTimeout)
-	if ctxDeadline, ok := ctx.Deadline(); ok && ctxDeadline.Before(deadline) {
-		deadline = ctxDeadline
-	}
-	_ = conn.SetDeadline(deadline)
-	if conn6 != nil {
-		_ = conn6.SetDeadline(deadline)
-	}
-
-	var questions []*dns.Msg
-	for _, qtype := range []uint16{dns.TypeA, dns.TypeAAAA} {
-		msg := new(dns.Msg)
-		msg.SetQuestion(fqdn, qtype)
-		// mDNS queries are not recursive; there is no upstream to recurse
-		// to on a link.
-		msg.RecursionDesired = false
-		questions = append(questions, msg)
-	}
-
-	sent := 0
-	for _, msg := range questions {
-		wire, err := msg.Pack()
-		if err != nil {
-			continue
-		}
-		sent += broadcast4(conn, wire)
-		if conn6 != nil {
-			sent += broadcast6(conn6, wire)
-		}
-	}
-	if sent == 0 {
-		return nil, 0, errors.New("no multicast-capable network interface")
-	}
-
-	type result struct {
-		addrs []netip.Addr
-		ttl   time.Duration
-	}
-	results := make(chan result, 2)
-	var wg sync.WaitGroup
-	collect := func(c *net.UDPConn) {
-		defer wg.Done()
-		addrs, ttl := receive(c, fqdn)
-		results <- result{addrs, ttl}
-	}
-	wg.Add(1)
-	go collect(conn)
-	if conn6 != nil {
-		wg.Add(1)
-		go collect(conn6)
-	}
-	wg.Wait()
-	close(results)
-
-	var addrs []netip.Addr
-	ttl := maxTTL
-	seen := map[netip.Addr]bool{}
-	for r := range results {
-		for _, addr := range r.addrs {
-			if !seen[addr] {
-				seen[addr] = true
-				addrs = append(addrs, addr)
-			}
-		}
-		if r.ttl > 0 && r.ttl < ttl {
-			ttl = r.ttl
-		}
-	}
-	return addrs, ttl, nil
-}
-
-// receive reads replies until the deadline, keeping the address records
-// that answer the name asked about. It does not stop at the first
-// response: a multi-homed peer answers with several addresses, and the
-// reachable one is not necessarily first.
-func receive(conn *net.UDPConn, fqdn string) ([]netip.Addr, time.Duration) {
-	var addrs []netip.Addr
-	ttl := time.Duration(0)
-	buf := make([]byte, 9000)
-	for {
-		n, _, err := conn.ReadFromUDP(buf)
-		if err != nil {
-			return addrs, ttl
-		}
-		msg := new(dns.Msg)
-		if err := msg.Unpack(buf[:n]); err != nil {
-			continue
-		}
-		for _, rr := range append(msg.Answer, msg.Extra...) {
-			if !strings.EqualFold(rr.Header().Name, fqdn) {
-				continue
-			}
-			var addr netip.Addr
-			switch record := rr.(type) {
-			case *dns.A:
-				addr, _ = netip.AddrFromSlice(record.A.To4())
-			case *dns.AAAA:
-				addr, _ = netip.AddrFromSlice(record.AAAA.To16())
-			default:
-				continue
-			}
-			if !addr.IsValid() {
-				continue
-			}
-			addrs = append(addrs, addr)
-			if recordTTL := clampTTL(rr.Header().Ttl); ttl == 0 || recordTTL < ttl {
-				ttl = recordTTL
-			}
-		}
-	}
-}
-
-func clampTTL(seconds uint32) time.Duration {
-	ttl := time.Duration(seconds) * time.Second
-	if ttl < minTTL {
-		return minTTL
-	}
-	if ttl > maxTTL {
-		return maxTTL
-	}
-	return ttl
-}
-
-// broadcast4 sends one query out of every interface that can carry
-// multicast, returning how many it reached.
-func broadcast4(conn *net.UDPConn, wire []byte) int {
-	packet := ipv4.NewPacketConn(conn)
-	target := &net.UDPAddr{IP: net.ParseIP(ipv4Group), Port: port}
-	sent := 0
-	for _, iface := range multicastInterfaces() {
-		if err := packet.SetMulticastInterface(&iface); err != nil {
-			continue
-		}
-		if _, err := packet.WriteTo(wire, nil, target); err == nil {
-			sent++
-		}
-	}
-	return sent
-}
-
-func broadcast6(conn *net.UDPConn, wire []byte) int {
-	packet := ipv6.NewPacketConn(conn)
-	target := &net.UDPAddr{IP: net.ParseIP(ipv6Group), Port: port}
-	sent := 0
-	for _, iface := range multicastInterfaces() {
-		if err := packet.SetMulticastInterface(&iface); err != nil {
-			continue
-		}
-		if _, err := packet.WriteTo(wire, nil, target); err == nil {
-			sent++
-		}
-	}
-	return sent
-}
-
-func multicastInterfaces() []net.Interface {
-	all, err := net.Interfaces()
+	_, addr, err := server.QueryAddr(queryCtx, strings.TrimSuffix(name, "."))
 	if err != nil {
-		return nil
+		return netip.Addr{}, fmt.Errorf("no mDNS response for %q: %w", name, err)
 	}
-	var usable []net.Interface
-	for _, iface := range all {
-		if iface.Flags&net.FlagUp == 0 || iface.Flags&net.FlagMulticast == 0 {
-			continue
-		}
-		usable = append(usable, iface)
-	}
-	return usable
+	return addr, nil
 }

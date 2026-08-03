@@ -21,6 +21,11 @@ import (
 // first because it is the mechanism the name is defined by, and because
 // the system path is the one already known to fail slowly with SERVFAIL.
 func DialContext(ctx context.Context, network, address string) (net.Conn, error) {
+	// Deliberately shorter than http.DefaultTransport's 30s dial timeout:
+	// every peer here is on a LAN or a Tailnet, where a reachable machine
+	// answers in well under a second, and a user waiting to add a PC
+	// should be told it failed rather than watch a spinner for half a
+	// minute.
 	dialer := &net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}
 
 	host, port, err := net.SplitHostPort(address)
@@ -28,7 +33,7 @@ func DialContext(ctx context.Context, network, address string) (net.Conn, error)
 		return dialer.DialContext(ctx, network, address)
 	}
 
-	addrs, err := Lookup(ctx, host)
+	addr, err := Lookup(ctx, host)
 	if err != nil {
 		// Fall back rather than failing: this is the path a correctly
 		// configured macOS or Avahi box was already using.
@@ -39,19 +44,12 @@ func DialContext(ctx context.Context, network, address string) (net.Conn, error)
 		return nil, fmt.Errorf("%s could not be found on the local network: %w", host, err)
 	}
 
-	// Try every address the peer answered with. A multi-homed machine
-	// advertises all of them and only some may be reachable from here,
-	// so the first answer is not necessarily the working one.
-	var lastErr error
-	for _, addr := range addrs {
-		conn, err := dialer.DialContext(ctx, network, net.JoinHostPort(addr.String(), port))
-		if err == nil {
-			return conn, nil
-		}
-		lastErr = err
+	conn, dialErr := dialer.DialContext(ctx, network, net.JoinHostPort(addr.String(), port))
+	if dialErr == nil {
+		return conn, nil
 	}
-	// Every advertised address failed, so the cached answer is suspect:
-	// drop it rather than serve it again until the TTL expires.
+	// It answered but will not carry a connection, so the cached address
+	// is suspect: drop it rather than serve it again until it expires.
 	Forget(host)
-	return nil, fmt.Errorf("%s answered on the local network but could not be reached: %w", host, lastErr)
+	return nil, fmt.Errorf("%s answered on the local network but could not be reached: %w", host, dialErr)
 }

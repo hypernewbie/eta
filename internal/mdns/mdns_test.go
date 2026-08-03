@@ -3,12 +3,13 @@ package mdns
 import (
 	"context"
 	"net"
-	"net/netip"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/miekg/dns"
+	"sync"
+	"sync/atomic"
 )
 
 // Only .local goes to multicast. Everything else must keep using the
@@ -33,39 +34,33 @@ func TestLookupResolvesAgainstARealResponder(t *testing.T) {
 	responder := startResponder(t, "jupiter.local.", "192.168.1.42")
 	defer responder()
 
-	addrs, err := Lookup(context.Background(), "jupiter.local")
+	addr, err := Lookup(context.Background(), "jupiter.local")
 	if err != nil {
 		t.Skipf("no multicast on this host: %v", err)
 	}
-	found := false
-	for _, addr := range addrs {
-		if addr.String() == "192.168.1.42" {
-			found = true
-		}
-	}
-	if !found {
-		t.Fatalf("expected the responder's address, got %v", addrs)
+	if addr.String() != "192.168.1.42" {
+		t.Fatalf("expected the responder's address, got %v", addr)
 	}
 }
 
 // The answer is cached: browsing a peer is thousands of requests, and
 // re-querying the link for each one would be slow and antisocial.
 func TestLookupCachesTheAnswer(t *testing.T) {
-	var queries int
+	var queries atomic.Int64
 	stop := startCountingResponder(t, "cached.local.", "10.0.0.9", &queries)
 	defer stop()
 
 	if _, err := Lookup(context.Background(), "cached.local"); err != nil {
 		t.Skipf("no multicast on this host: %v", err)
 	}
-	after := queries
+	after := queries.Load()
 	for i := 0; i < 5; i++ {
 		if _, err := Lookup(context.Background(), "cached.local"); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if queries != after {
-		t.Errorf("expected cached lookups to send no further queries, sent %d", queries-after)
+	if sent := queries.Load() - after; sent != 0 {
+		t.Errorf("expected cached lookups to send no further queries, sent %d", sent)
 	}
 
 	// And Forget must actually re-query, or a peer that moves stays
@@ -74,7 +69,7 @@ func TestLookupCachesTheAnswer(t *testing.T) {
 	if _, err := Lookup(context.Background(), "cached.local"); err != nil {
 		t.Fatal(err)
 	}
-	if queries <= after {
+	if queries.Load() <= after {
 		t.Error("Forget should have forced a fresh query")
 	}
 }
@@ -109,13 +104,16 @@ func TestDialContextPassesThroughNonLocalAddresses(t *testing.T) {
 // startResponder answers mDNS queries for one name, as a peer running
 // Avahi or Bonjour would.
 func startResponder(t *testing.T, fqdn, ip string) func() {
-	var ignored int
+	var ignored atomic.Int64
 	return startCountingResponder(t, fqdn, ip, &ignored)
 }
 
-func startCountingResponder(t *testing.T, fqdn, ip string, queries *int) func() {
+// queries is atomic because the responder counts on its own goroutine
+// while the test reads it -- counting it with a plain int made the
+// assertions themselves racy, and so worthless.
+func startCountingResponder(t *testing.T, fqdn, ip string, queries *atomic.Int64) func() {
 	t.Helper()
-	group := &net.UDPAddr{IP: net.ParseIP(ipv4Group), Port: port}
+	group := &net.UDPAddr{IP: net.ParseIP("224.0.0.251"), Port: 5353}
 	conn, err := net.ListenMulticastUDP("udp4", nil, group)
 	if err != nil {
 		t.Skipf("cannot listen on the mDNS group here: %v", err)
@@ -142,7 +140,7 @@ func startCountingResponder(t *testing.T, fqdn, ip string, queries *int) func() 
 			if !strings.EqualFold(question.Name, fqdn) || question.Qtype != dns.TypeA {
 				continue
 			}
-			*queries++
+			queries.Add(1)
 			reply := new(dns.Msg)
 			reply.SetReply(msg)
 			reply.Answer = []dns.RR{&dns.A{
@@ -159,4 +157,69 @@ func startCountingResponder(t *testing.T, fqdn, ip string, queries *int) func() 
 	return func() { close(done); conn.Close() }
 }
 
-var _ = netip.Addr{}
+// Concurrent first lookups for one name must collapse into a single
+// query. A browse session opens many connections at once, so this is the
+// ordinary case rather than a rare race: without it, every one of them
+// opens sockets and floods the link with the same question.
+func TestLookupCollapsesConcurrentQueries(t *testing.T) {
+	var queries atomic.Int64
+	stop := startCountingResponder(t, "stampede.local.", "10.0.0.11", &queries)
+	defer stop()
+
+	// Baseline: what one lookup costs on the wire. pion sends the same
+	// question out several interfaces and sockets, so this is not 1, and
+	// asserting a fixed number here would be asserting pion's internals
+	// rather than Eta's collapsing.
+	Forget("stampede.local")
+	if _, err := Lookup(context.Background(), "stampede.local"); err != nil {
+		t.Skipf("no multicast on this host: %v", err)
+	}
+	baseline := queries.Load()
+	if baseline == 0 {
+		t.Skip("responder saw no queries; no multicast on this host")
+	}
+
+	// Now the same thing from twelve goroutines at once, which is what a
+	// browse session does. If they collapse, the cost is one lookup's
+	// worth; if they do not, it is twelve.
+	Forget("stampede.local")
+	before := queries.Load()
+	var wg sync.WaitGroup
+	errs := make(chan error, 12)
+	for i := 0; i < 12; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if _, err := Lookup(context.Background(), "stampede.local"); err != nil {
+				errs <- err
+			}
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Fatalf("concurrent lookup failed: %v", err)
+	}
+
+	if sent := queries.Load() - before; sent > baseline {
+		t.Errorf("12 concurrent lookups cost %d queries against a single lookup's %d; they did not collapse", sent, baseline)
+	}
+}
+
+// An expired entry for a name that no longer resolves must not sit in the
+// map forever.
+func TestLookupDropsAnExpiredEntry(t *testing.T) {
+	Forget("gone.local")
+	cacheMu.Lock()
+	cache["gone.local"] = entry{expires: time.Now().Add(-time.Minute)}
+	cacheMu.Unlock()
+
+	_, _ = Lookup(context.Background(), "gone.local")
+
+	cacheMu.Lock()
+	_, still := cache["gone.local"]
+	cacheMu.Unlock()
+	if still {
+		t.Error("an expired entry that failed to re-resolve was left in the cache")
+	}
+}

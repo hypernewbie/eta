@@ -201,6 +201,11 @@ func TestRealSSHDSessionAndLeash(t *testing.T) {
 		Destination: "127.0.0.1",
 		Module:      "github.com/hypernewbie/eta",
 		Version:     "v0.0.0-test",
+		// A port nothing owns, so this exercises the install path. Left
+		// at the default it would adopt whatever is on 7080 -- including
+		// a developer's own running Eta -- and then rightly refuse to
+		// kill it, failing this leash assertion for the wrong reason.
+		RemotePort: freePort(t),
 	})
 	if err != nil {
 		t.Fatalf("Start: %v", err)
@@ -252,7 +257,12 @@ func TestRealSSHDManagerReusesOneRemoteProcess(t *testing.T) {
 	fixture.use(t)
 
 	manager := NewManager()
-	options := Options{Destination: "127.0.0.1", Module: "github.com/hypernewbie/eta", Version: "v0.0.0-test"}
+	options := Options{
+		Destination: "127.0.0.1",
+		Module:      "github.com/hypernewbie/eta",
+		Version:     "v0.0.0-test",
+		RemotePort:  freePort(t), // never probe a real instance on 7080
+	}
 	t.Cleanup(manager.StopAll)
 
 	first, err := manager.Connect(context.Background(), options)
@@ -331,10 +341,16 @@ func TestRealSSHDAdoptsAnAlreadyRunningEta(t *testing.T) {
 
 	// Someone's own eta, already running on the default port. Started
 	// here with no leash at all, exactly as a person running it would.
+	// Deliberately NOT defaultRemotePort: this machine is the "remote"
+	// for these tests, and a developer running Eta normally has 7080
+	// bound. Probing it would adopt their live instance instead of the
+	// one this test started, and the assertions would be about their
+	// process rather than anything this test controls.
+	adoptPort := freePort(t)
 	etaBinary := filepath.Join(fixture.fakeHome, ".eta", "bin", "eta")
 	theirs := exec.Command(etaBinary,
 		"--ip", "127.0.0.1",
-		"--port", strconv.Itoa(defaultRemotePort),
+		"--port", strconv.Itoa(adoptPort),
 		"--root", t.TempDir(),
 	)
 	theirs.Env = append(os.Environ(),
@@ -348,11 +364,11 @@ func TestRealSSHDAdoptsAnAlreadyRunningEta(t *testing.T) {
 		_ = theirs.Process.Kill()
 		_ = theirs.Wait()
 	}()
-	theirURL := "http://127.0.0.1:" + strconv.Itoa(defaultRemotePort)
+	theirURL := "http://127.0.0.1:" + strconv.Itoa(adoptPort)
 	deadline := time.Now().Add(20 * time.Second)
 	for !answers(theirURL + "/api/healthz") {
 		if time.Now().After(deadline) {
-			t.Skipf("could not start an eta on port %d to adopt; it may be in use", defaultRemotePort)
+			t.Skipf("could not start an eta on port %d to adopt", adoptPort)
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
@@ -361,6 +377,7 @@ func TestRealSSHDAdoptsAnAlreadyRunningEta(t *testing.T) {
 		Destination: "127.0.0.1",
 		Module:      "github.com/hypernewbie/eta",
 		Version:     "v0.0.0-test",
+		RemotePort:  adoptPort,
 	})
 	if err != nil {
 		t.Fatalf("Start: %v", err)
@@ -386,4 +403,16 @@ func TestRealSSHDAdoptsAnAlreadyRunningEta(t *testing.T) {
 	if !answers(theirURL + "/api/healthz") {
 		t.Fatal("ending the session killed an eta this computer did not start")
 	}
+}
+
+// freePort returns a port with nothing on it, so a test never probes a
+// fixed one that a real instance on this machine might own.
+func freePort(t *testing.T) int {
+	t.Helper()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	return listener.Addr().(*net.TCPAddr).Port
 }

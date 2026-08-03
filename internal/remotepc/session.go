@@ -79,6 +79,17 @@ type Options struct {
 	// version than the machine that started it.
 	Module  string
 	Version string
+	// Port to look for an eta already running on that PC. Zero means
+	// eta's own default. Set in tests so they never probe -- or adopt --
+	// a real instance the developer is running on this machine.
+	RemotePort int
+}
+
+func (o Options) remotePort() int {
+	if o.RemotePort > 0 {
+		return o.RemotePort
+	}
+	return defaultRemotePort
 }
 
 // Session is one running remote eta, reachable at URL while alive.
@@ -392,7 +403,7 @@ func Begin(ctx context.Context, opts Options) (*Session, error) {
 	if err := validateDestination(opts.Destination); err != nil {
 		return nil, err
 	}
-	if session, ok := adopt(ctx, opts.Destination); ok {
+	if session, ok := adopt(ctx, opts.Destination, opts.remotePort()); ok {
 		return session, nil
 	}
 	return install(ctx, opts)
@@ -422,13 +433,13 @@ func Begin(ctx context.Context, opts Options) (*Session, error) {
 // Whether it is really eta answering is decided by asking it, not by
 // finding something bound to the port: anything at all can be listening
 // on 7080, and only eta answers its own health endpoint.
-func adopt(ctx context.Context, destination string) (*Session, bool) {
+func adopt(ctx context.Context, destination string, remotePort int) (*Session, bool) {
 	localPort, err := freeLocalPort()
 	if err != nil {
 		return nil, false
 	}
 	args, err := sshArgsMode(destination,
-		fmt.Sprintf("127.0.0.1:%d:127.0.0.1:%d", localPort, defaultRemotePort), true)
+		fmt.Sprintf("127.0.0.1:%d:127.0.0.1:%d", localPort, remotePort), true)
 	if err != nil {
 		return nil, false
 	}
