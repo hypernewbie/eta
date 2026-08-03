@@ -88,6 +88,23 @@ func TestRemoteCommandForwardHostFollowsOptionsHost(t *testing.T) {
 	}
 }
 
+// The -L bind must be just a host, not host:port. A 5-field spec
+// like "charon:7080:44715:127.0.0.1:7080" ssh rejects with
+// "Bad local forwarding specification" — exactly what the install
+// path produced when r.Host was passed through unchanged.
+func TestRemoteCommandForwardHasNoPortInBind(t *testing.T) {
+	for _, bind := range []string{"charon", "192.168.1.10", "::1", "100.92.136.40"} {
+		args, err := sshArgsMode("minerva", bind+":44715:127.0.0.1:7080", false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		joined := strings.Join(args, " ")
+		if !strings.Contains(joined, "-L "+bind+":44715:127.0.0.1:7080") {
+			t.Errorf("bind %q: expected forward to start with -L <host>:<port>, got ssh args: %v", bind, args)
+		}
+	}
+}
+
 // TestRemoteCommandContainsEverythingUnderDotEta guards the promise that
 // cleanup is one directory: if GOPATH, the build cache or the binary
 // escaped ~/.eta, removing it would leave gigabytes of cache behind

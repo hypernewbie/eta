@@ -150,6 +150,28 @@ func jsonQuote(s string) string {
 	return string(encoded)
 }
 
+// hostOnly drops the port from an "host:port" address so it can be
+// used as the -L bind without producing a 5-field spec ssh rejects.
+// Regression: a request Host of "charon:7080" was being passed
+// through unchanged, which made the install command
+//   ssh ... -L charon:7080:<forwardPort>:127.0.0.1:<remotePort> ...
+// and ssh reported "Bad local forwarding specification".
+func TestHostOnlyStripsPort(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"", ""},
+		{"charon", "charon"},
+		{"charon:7080", "charon"},
+		{"192.168.1.10:7080", "192.168.1.10"},
+		{"[::1]:7080", "::1"},
+		{"100.92.136.40", "100.92.136.40"},
+	}
+	for _, c := range cases {
+		if got := hostOnly(c.in); got != c.want {
+			t.Errorf("hostOnly(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
 // A successful SSH setup must hand the browser a peer with name, id,
 // accent, and glyph populated. The browser renders every peer with
 // peer.name.toUpperCase() and the destination-stamped accent and glyph

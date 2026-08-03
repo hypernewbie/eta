@@ -3559,6 +3559,20 @@ async function setupPCPoll(destination) {
                 // It is a peer like any other now, so the rest of the UI needs
                 // no knowledge of how it got here.
                 enrolledPeers = await api("/api/peers");
+                // The desktop icons are rendered once on page load from the
+                // inventory snapshot at boot, and the new peer only appears
+                // in the icon list now — repaint so the user can click on
+                // it immediately rather than reloading the page. Same for
+                // any explorer window already on screen that holds a stale
+                // copy of the now-replaced SSH-backed record.
+                void renderDesktopIcons();
+                for (const item of desktopWindows.values()) {
+                    if (!item.peer)
+                        continue;
+                    const updated = enrolledPeers.find((peer) => peer.url === item.peer.url || peer.ssh_destination === item.peer.ssh_destination);
+                    if (updated)
+                        item.peer = updated;
+                }
                 refreshTaskStrip();
                 // Worth distinguishing: it explains why setup was instant, and
                 // it means disconnecting will leave that Eta running, because

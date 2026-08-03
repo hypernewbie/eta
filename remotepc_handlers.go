@@ -2,12 +2,29 @@ package main
 
 import (
 	"encoding/json"
+	"net"
 	"net/http"
 	"strings"
 
 	"github.com/hypernewbie/eta/internal/peers"
 	"github.com/hypernewbie/eta/internal/remotepc"
 )
+
+// hostOnly strips the port from an "host:port" address, leaving just
+// the host. r.Host carries the port the browser used to reach the
+// coordinator; the -L bind wants only the host, since the forward's
+// port is the second field. A bare host (no colon) passes through
+// unchanged. An empty input returns "" so the caller can decide
+// whether to substitute 127.0.0.1.
+func hostOnly(hostport string) string {
+	if hostport == "" {
+		return ""
+	}
+	if host, _, err := net.SplitHostPort(hostport); err == nil {
+		return host
+	}
+	return hostport
+}
 
 // Connecting is asynchronous: a first connect to a PC compiles eta from
 // source there and can take minutes. So POST starts it and returns at
@@ -43,10 +60,13 @@ func (s *server) handleRemotePCConnect(w http.ResponseWriter, r *http.Request) {
 	if err := s.remotePCs.ConnectAsync(remotepc.Options{
 		Destination: destination,
 		// The address the browser used to reach this server is also
-		// the address the ssh forward can be reached on. Empty Host
-		// would fall back to 127.0.0.1, which only works for a
-		// browser on the same machine.
-		Host: r.Host,
+		// the address the ssh forward can be reached on. The port
+		// part is dropped: the -L bind is `<host>:<forwardPort>` and
+		// including r.Host's port produces a 5-field spec ssh rejects
+		// ("charon:7080:42081:127.0.0.1:34983"). Empty after the
+		// split falls back to 127.0.0.1, the same-machine case the
+		// test suite relies on.
+		Host: hostOnly(r.Host),
 		// Forward the coordinator's access verifier so the remote
 		// installs with the same password the user already has. Empty
 		// when the coordinator itself has no password configured.
