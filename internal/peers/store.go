@@ -97,7 +97,10 @@ func (s *Store) Update(peer Peer) error {
 		return err
 	}
 	for i := range list {
-		if list[i].URL == peer.URL {
+		if list[i].URL == peer.URL || (peer.SSHDestination != "" && list[i].SSHDestination == peer.SSHDestination) {
+			if peer.Verifier == "" {
+				peer.Verifier = list[i].Verifier
+			}
 			list[i] = peer
 			return s.save(list)
 		}
@@ -172,8 +175,9 @@ func (s *Store) Find(raw string) (Peer, bool, error) {
 	if err != nil {
 		return Peer{}, false, err
 	}
+	cleanRaw := strings.TrimSuffix(raw, "/")
 	for _, peer := range items {
-		if peer.URL == strings.TrimSuffix(raw, "/") {
+		if peer.URL == cleanRaw || (peer.SSHDestination != "" && peer.SSHDestination == cleanRaw) || (peer.Name != "" && strings.EqualFold(peer.Name, cleanRaw)) {
 			return peer, true, nil
 		}
 	}

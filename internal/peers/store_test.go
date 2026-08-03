@@ -27,6 +27,33 @@ func TestExplicitPeerInventory(t *testing.T) {
 	}
 }
 
+func TestPeerVerifierPersistedAcrossRestarts(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "peers.json")
+	s1 := New(path)
+	if err := s1.UpsertBySSHDestination(Peer{SSHDestination: "hammond", URL: "http://127.0.0.1:40001", Verifier: "secret-hash-123"}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Re-instantiate store (simulating server restart)
+	s2 := New(path)
+	peer, found, err := s2.FindBySSHDestination("hammond")
+	if err != nil || !found {
+		t.Fatalf("failed to find peer after restart: %v", err)
+	}
+	if peer.Verifier != "secret-hash-123" {
+		t.Fatalf("expected verifier 'secret-hash-123', got %q", peer.Verifier)
+	}
+
+	// Reconnect on new port, without providing verifier (must preserve existing)
+	if err := s2.UpsertBySSHDestination(Peer{SSHDestination: "hammond", URL: "http://127.0.0.1:40002"}); err != nil {
+		t.Fatal(err)
+	}
+	peer2, found2, _ := s2.FindBySSHDestination("hammond")
+	if !found2 || peer2.Verifier != "secret-hash-123" {
+		t.Fatalf("verifier wiped on reconnect: %+v", peer2)
+	}
+}
+
 func TestUpdateReplacesIdentityInPlace(t *testing.T) {
 	store := New(filepath.Join(t.TempDir(), "peers.json"))
 	if err := store.Add(Peer{URL: "http://pc-b:7080", Name: "OLD", Accent: "purple", Glyph: "A"}); err != nil {

@@ -100,10 +100,14 @@ func (s *server) handleRemotePCStatus(w http.ResponseWriter, r *http.Request) {
 			// closed port. Guarded because an instance can run without a peer
 			// inventory, as every other peer-touching handler here allows.
 			if s.peers != nil {
+				verifier := s.access.EncodedVerifier()
+				if existing, found, _ := s.peers.FindBySSHDestination(destination); found && existing.Verifier != "" {
+					verifier = existing.Verifier
+				}
 				peer := peers.Peer{
 					SSHDestination: destination,
 					URL:            session.URL(),
-					Verifier:       s.access.EncodedVerifier(),
+					Verifier:       verifier,
 				}
 				// The browser renders each peer with peer.name.toUpperCase()
 				// and the destination-stamped accent and glyph (see
