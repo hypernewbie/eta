@@ -771,7 +771,7 @@ func (s *Session) WaitReady(ctx context.Context) error {
 	ctx, cancel := context.WithTimeout(ctx, establishTimeout)
 	defer cancel()
 
-	url := "http://127.0.0.1:" + strconv.Itoa(s.localPort) + "/api/healthz"
+	url := s.url + "/api/healthz"
 	client := &http.Client{Timeout: 3 * time.Second}
 	for {
 		select {

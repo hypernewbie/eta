@@ -2,11 +2,15 @@ package remotepc
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -606,6 +610,46 @@ sleep 30
 	// exits promptly instead of waiting on the fake ssh's 30s sleep.
 	cancel()
 	<-done
+}
+
+// WaitReady polls session.url, not 127.0.0.1:<localPort>. The URL
+// is whatever bind the install picked, which is the request's host
+// for cross-machine setups and 127.0.0.1 only for the same-machine
+// case. The test sets url to a real test server and localPort to a
+// different (unused) port: if WaitReady reverts to the hardcoded
+// 127.0.0.1, it would poll the unused port and time out.
+func TestWaitReadyUsesSessionURL(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/healthz" {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	u, err := url.Parse(server.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	testPort, err := strconv.Atoi(u.Port())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	session := &Session{
+		destination: "minerva",
+		url:         server.URL,
+		localPort:   testPort + 1, // wrong port on purpose
+		exited:      make(chan struct{}),
+	}
+	t.Cleanup(func() { close(session.exited) })
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := session.WaitReady(ctx); err != nil {
+		t.Fatalf("WaitReady must poll the session URL (%s), not 127.0.0.1:localPort: %v", session.url, err)
+	}
 }
 
 // A Begin-time error (dev-build refusal, detectShell failure, missing
