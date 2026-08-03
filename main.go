@@ -609,6 +609,10 @@ func (w *responseWriterCounter) Write(b []byte) (int, error) {
 
 func (s *server) trafficStatsMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/stats/network") {
+			next.ServeHTTP(w, r)
+			return
+		}
 		rw := &responseWriterCounter{ResponseWriter: w}
 		reqLen := uint64(r.ContentLength)
 		if reqLen > 0 {
