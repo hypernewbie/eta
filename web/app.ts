@@ -67,6 +67,7 @@ type WinBoxInstance = {
   focus: () => void;
   restore: () => void;
   minimize: () => void;
+  close: () => void;
   x: number;
   y: number;
   width: number;
@@ -749,7 +750,7 @@ function showToast(message, variant = "danger") {
 
 type DesktopWindow = {
   title: string;
-  kind: "explorer" | "file" | "terminal";
+  kind: "explorer" | "file" | "terminal" | "setup-pc";
   peer: Peer | null;
   persist?: boolean;
   window: WinBoxInstance;
@@ -898,7 +899,9 @@ function refreshTaskStrip() {
         ? "folder-open"
         : item.kind === "terminal"
           ? "terminal-square"
-          : "file-text";
+          : item.kind === "setup-pc"
+            ? "server"
+            : "file-text";
     const state = [
       "task-button",
       "task-window",
@@ -4084,175 +4087,202 @@ const SETUP_PHASE_TEXT: Record<string, string> = {
   disconnected: "Not connected.",
 };
 
-let setupPolling = false;
-
-function setupPCReset() {
-  $("#setup-pc-progress").hidden = true;
-  $("#setup-pc-output").hidden = true;
-  $("#setup-pc-output").textContent = "";
-  ($("#setup-pc-start") as any).disabled = false;
-  ($("#setup-pc-destination") as any).disabled = false;
+function renderSetupPCTemplate(initialDestination: string = ""): HTMLElement {
+  const container = document.createElement("div");
+  container.className = "setup-pc-window-panel";
+  container.innerHTML = `
+    <div class="setup-pc">
+      <p class="setup-pc-intro">
+        Runs Eta on another computer over SSH and adds it as a PC. It works if <code>ssh &lt;name&gt;</code> already works from here, and that computer has Go installed.
+      </p>
+      <label class="setup-pc-label">SSH destination</label>
+      <input type="text" class="setup-pc-destination settings-access-input" placeholder="minerva, or pi@minerva" value="${escapeHTML(initialDestination)}" ${initialDestination ? "disabled" : ""} />
+      <p class="setup-pc-hint">A hostname, <code>user@host</code>, or a name from <code>~/.ssh/config</code>.</p>
+      <div class="setup-pc-progress" hidden>
+        <div class="setup-pc-phase">
+          <sl-spinner class="setup-pc-spinner"></sl-spinner>
+          <span class="setup-pc-phase-text">Connecting…</span>
+        </div>
+        <pre class="setup-pc-output" hidden></pre>
+      </div>
+      <div class="setup-pc-actions">
+        <sl-button class="setup-pc-cancel">Cancel</sl-button>
+        <sl-button class="setup-pc-start" variant="primary" ${initialDestination ? "disabled" : ""}>Set up</sl-button>
+      </div>
+    </div>
+  `;
+  return container;
 }
 
-// Polls until the PC is up or has failed. The first connect compiles Eta
-// on that machine, so this can legitimately run for minutes — which is
-// why the server hands back a phase to poll rather than holding a request
-// open for the whole thing.
-async function setupPCPoll(destination: string) {
-  setupPolling = true;
-  try {
-    while (setupPolling) {
-      const status: RemotePCStatus = await api(
-        `/api/remote-pc?destination=${encodeURIComponent(destination)}`,
-      );
-      $("#setup-pc-phase-text").textContent =
-        SETUP_PHASE_TEXT[status.phase] ?? status.phase;
-
-      if (status.phase === "ready") {
-        ($("#setup-pc-spinner") as HTMLElement).hidden = true;
-        // It is a peer like any other now, so the rest of the UI needs
-        // no knowledge of how it got here.
-        enrolledPeers = await api("/api/peers");
-        // The desktop icons are rendered once on page load from the
-        // inventory snapshot at boot, and the new peer only appears
-        // in the icon list now — repaint so the user can click on
-        // it immediately rather than reloading the page. Same for
-        // any explorer window already on screen that holds a stale
-        // copy of the now-replaced SSH-backed record.
-        void renderDesktopIcons();
-        for (const item of desktopWindows.values()) {
-          if (!item.peer) continue;
-          const updated = enrolledPeers.find(
-            (peer) =>
-              peer.url === item.peer!.url ||
-              peer.ssh_destination === item.peer!.ssh_destination,
-          );
-          if (updated) item.peer = updated;
-        }
-        refreshTaskStrip();
-        // Worth distinguishing: it explains why setup was instant, and
-        // it means disconnecting will leave that Eta running, because
-        // this computer never started it.
-        showToast(
-          status.adopted
-            ? `Connected to the Eta already running on ${destination}`
-            : `${destination} is ready`,
-          "success",
-        );
-        ($("#setup-pc-dialog") as any).hide();
-        setupPCReset();
-        return;
-      }
-
-      if (status.phase === "failed" || status.error) {
-        ($("#setup-pc-spinner") as HTMLElement).hidden = true;
-        $("#setup-pc-phase-text").textContent =
-          status.error ?? "Could not set up that PC.";
-        // The remote's own output, shown only on failure: it is the
-        // difference between "it didn't work" and "Go isn't installed".
-        if (status.recent?.length) {
-          $("#setup-pc-output").textContent = status.recent.join("\n");
-          $("#setup-pc-output").hidden = false;
-        }
-        ($("#setup-pc-start") as any).disabled = false;
-        ($("#setup-pc-destination") as any).disabled = false;
-        return;
-      }
-
-      // The PC vanished from the server's view without ever reporting a
-      // failure — treat it as one rather than polling forever.
-      if (status.phase === "disconnected") {
-        ($("#setup-pc-spinner") as HTMLElement).hidden = true;
-        $("#setup-pc-phase-text").textContent = "The connection ended.";
-        ($("#setup-pc-start") as any).disabled = false;
-        ($("#setup-pc-destination") as any).disabled = false;
-        return;
-      }
-
-      await new Promise((resolve) => setTimeout(resolve, 1000));
-    }
-  } catch (error) {
-    ($("#setup-pc-spinner") as HTMLElement).hidden = true;
-    $("#setup-pc-phase-text").textContent = (error as Error).message;
-    ($("#setup-pc-start") as any).disabled = false;
-    ($("#setup-pc-destination") as any).disabled = false;
-  } finally {
-    setupPolling = false;
-  }
-}
-
-// Reconnects a PC already in the inventory. This is what "persistence"
-// means for an SSH-backed PC: the entry survives, the connection does
-// not, and opening it again converges rather than resuming. Nothing is
-// left running on that machine between sessions, so this is also the
-// normal path after either computer restarts.
-async function reconnectRemotePC(destination: string) {
-  setupPCReset();
-  ($("#setup-pc-destination") as any).value = destination;
-  ($("#setup-pc-destination") as any).disabled = true;
-  ($("#setup-pc-start") as any).disabled = true;
-  ($("#setup-pc-spinner") as HTMLElement).hidden = false;
-  $("#setup-pc-phase-text").textContent = SETUP_PHASE_TEXT.connecting;
-  $("#setup-pc-progress").hidden = false;
-  ($("#setup-pc-dialog") as any).show();
-  try {
-    await api("/api/remote-pc", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ destination }),
-    });
-  } catch (error) {
-    ($("#setup-pc-spinner") as HTMLElement).hidden = true;
-    $("#setup-pc-phase-text").textContent = (error as Error).message;
-    ($("#setup-pc-destination") as any).disabled = false;
-    ($("#setup-pc-start") as any).disabled = false;
+function createSetupPCWindow(
+  initialDestination: string = "",
+  position?: { x: number; y: number },
+) {
+  const key = `setup-pc:${initialDestination.trim() || Date.now()}`;
+  if (desktopWindows.has(key)) {
+    toggleDesktopWindow(key);
     return;
   }
-  await setupPCPoll(destination);
+  const WinBox = window.WinBox;
+  if (!WinBox) return;
+
+  const panel = renderSetupPCTemplate(initialDestination);
+  const title = initialDestination
+    ? `Set up ${initialDestination.toUpperCase()}`
+    : "Set up Remote PC";
+
+  let isPolling = true;
+
+  const instance = new WinBox({
+    title,
+    mount: panel,
+    class: "eta-window identity-window",
+    x: position ? position.x : "center",
+    y: position ? position.y : 80,
+    width: Math.min(540, Math.floor(window.innerWidth * 0.9)),
+    height: 420,
+    bottom: 40,
+    onclose: () => {
+      isPolling = false;
+      desktopWindows.delete(key);
+      if (activeWindowKey === key) activeWindowKey = null;
+      refreshTaskStrip();
+      queueMicrotask(() => panel.remove());
+    },
+  });
+
+  colorWindow(instance, null);
+
+  desktopWindows.set(key, {
+    title,
+    kind: "setup-pc",
+    peer: null,
+    persist: false,
+    window: instance,
+    state: () => ({ kind: "setup-pc" as any, root: 0 }),
+  });
+
+  activeWindowKey = key;
+  refreshTaskStrip();
+
+  const destInput = panel.querySelector(
+    ".setup-pc-destination",
+  ) as HTMLInputElement;
+  const startBtn = panel.querySelector(".setup-pc-start") as any;
+  const cancelBtn = panel.querySelector(".setup-pc-cancel") as any;
+  const progressDiv = panel.querySelector(".setup-pc-progress") as HTMLElement;
+  const spinner = panel.querySelector(".setup-pc-spinner") as HTMLElement;
+  const phaseText = panel.querySelector(".setup-pc-phase-text") as HTMLElement;
+  const outputPre = panel.querySelector(".setup-pc-output") as HTMLElement;
+
+  const startSetup = async (destination: string) => {
+    if (!destination) return;
+    destInput.disabled = true;
+    startBtn.disabled = true;
+    progressDiv.hidden = false;
+    spinner.hidden = false;
+    outputPre.hidden = true;
+    outputPre.textContent = "";
+    phaseText.textContent = SETUP_PHASE_TEXT.connecting;
+
+    try {
+      await api("/api/remote-pc", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ destination }),
+      });
+    } catch (error) {
+      spinner.hidden = true;
+      phaseText.textContent = (error as Error).message;
+      destInput.disabled = false;
+      startBtn.disabled = false;
+      return;
+    }
+
+    while (isPolling) {
+      try {
+        const status: RemotePCStatus = await api(
+          `/api/remote-pc?destination=${encodeURIComponent(destination)}`,
+        );
+        if (!isPolling) return;
+        phaseText.textContent = SETUP_PHASE_TEXT[status.phase] ?? status.phase;
+
+        if (status.phase === "ready") {
+          spinner.hidden = true;
+          enrolledPeers = await api("/api/peers");
+          void renderDesktopIcons();
+          const peer = enrolledPeers.find(
+            (p) => p.ssh_destination === destination || p.url === status.url,
+          );
+          if (peer) void openExplorerWindow(undefined, peer);
+          showToast(
+            status.adopted
+              ? `Connected to the Eta already running on ${destination}`
+              : `${destination} is ready`,
+            "success",
+          );
+          instance.close();
+          return;
+        }
+
+        if (status.phase === "failed" || status.error) {
+          spinner.hidden = true;
+          phaseText.textContent = status.error ?? "Could not set up that PC.";
+          if (status.recent?.length) {
+            outputPre.textContent = status.recent.join("\n");
+            outputPre.hidden = false;
+          }
+          destInput.disabled = false;
+          startBtn.disabled = false;
+          return;
+        }
+
+        if (status.phase === "disconnected") {
+          spinner.hidden = true;
+          phaseText.textContent = "The connection ended.";
+          destInput.disabled = false;
+          startBtn.disabled = false;
+          return;
+        }
+      } catch (error) {
+        if (!isPolling) return;
+        spinner.hidden = true;
+        phaseText.textContent = (error as Error).message;
+        destInput.disabled = false;
+        startBtn.disabled = false;
+        return;
+      }
+      await new Promise((res) => setTimeout(res, 1000));
+    }
+  };
+
+  startBtn.addEventListener("click", () => {
+    const dest = destInput.value.trim();
+    if (dest) void startSetup(dest);
+  });
+
+  cancelBtn.addEventListener("click", () => {
+    instance.close();
+  });
+
+  destInput.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && !destInput.disabled) {
+      const dest = destInput.value.trim();
+      if (dest) void startSetup(dest);
+    }
+  });
+
+  if (initialDestination) {
+    void startSetup(initialDestination);
+  }
+}
+
+async function reconnectRemotePC(destination: string) {
+  createSetupPCWindow(destination);
 }
 
 $("#setup-pc-button").addEventListener("click", () => {
-  setupPCReset();
-  ($("#setup-pc-destination") as any).value = "";
-  ($("#setup-pc-dialog") as any).show();
-});
-
-$("#setup-pc-cancel").addEventListener("click", () => {
-  // Stops watching, but deliberately does not tear down a setup already
-  // in flight: closing a dialog should not abandon a PC halfway through
-  // installing. Reopening and entering the same name picks the same
-  // session back up, because the server keeps one per destination.
-  setupPolling = false;
-  ($("#setup-pc-dialog") as any).hide();
-  setupPCReset();
-});
-
-$("#setup-pc-start").addEventListener("click", async () => {
-  const destination = (($("#setup-pc-destination") as any).value ?? "").trim();
-  if (!destination) return;
-
-  ($("#setup-pc-start") as any).disabled = true;
-  ($("#setup-pc-destination") as any).disabled = true;
-  ($("#setup-pc-spinner") as HTMLElement).hidden = false;
-  $("#setup-pc-output").hidden = true;
-  $("#setup-pc-output").textContent = "";
-  $("#setup-pc-phase-text").textContent = SETUP_PHASE_TEXT.connecting;
-  $("#setup-pc-progress").hidden = false;
-
-  try {
-    await api("/api/remote-pc", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ destination }),
-    });
-  } catch (error) {
-    ($("#setup-pc-spinner") as HTMLElement).hidden = true;
-    $("#setup-pc-phase-text").textContent = (error as Error).message;
-    ($("#setup-pc-start") as any).disabled = false;
-    ($("#setup-pc-destination") as any).disabled = false;
-    return;
-  }
-  void setupPCPoll(destination);
+  createSetupPCWindow();
 });
 
 $("#theme-button").addEventListener("click", () => $("#theme-dialog").show());
