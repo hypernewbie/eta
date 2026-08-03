@@ -227,18 +227,63 @@ func TestRemotePCSetupPopulatesPeerIdentityOnReady(t *testing.T) {
 		t.Errorf("peer identity fields must all be populated, got %+v", after)
 	}
 
-	// A reconnect on the same destination must preserve the identity
-	// from the existing record rather than re-probing, since the URL
-	// alone changes every session and a re-probe would race the
-	// user's click.
-	s.remotePCs.SetSessionForTest("minerva", "http://127.0.0.1:1") // a different forwarded port
+	// A reconnect on the same destination must also probe, not
+	// preserve from the previous record. The URL is per-session,
+	// and a re-probe is the only way to pick up identity changes
+	// on the remote (rename, new accent).
+	s.remotePCs.SetSessionForTest("minerva", "http://127.0.0.1:1")
 	recorder = httptest.NewRecorder()
 	s.routes().ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api/remote-pc?destination=minerva", nil))
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("reconnect: expected 200, got %d (%s)", recorder.Code, recorder.Body)
 	}
-	preserved, _, _ := s.peers.FindBySSHDestination("minerva")
-	if preserved.Name != after.Name || preserved.Accent != after.Accent || preserved.Glyph != after.Glyph {
-		t.Errorf("a reconnect must preserve identity; got %+v, want %+v", preserved, after)
+	reconnect, _, _ := s.peers.FindBySSHDestination("minerva")
+	if reconnect.Name != after.Name {
+		t.Errorf("reconnect must re-probe; got %q want %q", reconnect.Name, after.Name)
+	}
+	if reconnect.URL != "http://127.0.0.1:1" {
+		t.Errorf("reconnect URL must be the new session's URL; got %q", reconnect.URL)
+	}
+}
+
+func TestRemotePCSetupDoesNotMigrateBugStateRecord(t *testing.T) {
+	remote, err := newServer([]string{t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	remoteHTTP := httptest.NewServer(remote.routes())
+	defer remoteHTTP.Close()
+
+	s := remotePCTestServer(t)
+
+	// Bug-state record: SSHDestination and URL, empty identity. The
+	// form every record had before the identity-probe fix.
+	if err := s.peers.UpsertBySSHDestination(peers.Peer{
+		SSHDestination: "minerva",
+		URL:            "http://127.0.0.1:44715",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	s.remotePCs.SetSessionForTest("minerva", remoteHTTP.URL)
+
+	recorder := httptest.NewRecorder()
+	s.routes().ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api/remote-pc?destination=minerva", nil))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d (%s)", recorder.Code, recorder.Body)
+	}
+
+	after, found, err := s.peers.FindBySSHDestination("minerva")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !found {
+		t.Fatal("expected a record after a successful setup")
+	}
+	if after.Name == "" || after.ID == "" || after.Accent == "" || after.Glyph == "" {
+		t.Fatalf("identity must come from the live probe, not the empty bug-state record; got %+v", after)
+	}
+	if after.URL != remoteHTTP.URL {
+		t.Errorf("URL must be the new session's URL, not the old loopback one; got %q want %q", after.URL, remoteHTTP.URL)
 	}
 }

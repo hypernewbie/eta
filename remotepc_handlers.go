@@ -110,20 +110,35 @@ func (s *server) handleRemotePCStatus(w http.ResponseWriter, r *http.Request) {
 				// handlePeerAdd probes the peer's /api/identity for the same
 				// reason; an SSH setup must do the same.
 				//
-				// Preserve the identity on a reconnect, since the URL alone
-				// changes every session and a re-probe would race the user's
-				// reconnect click. A first-time setup against this destination
-				// has no existing record, so probe and fill the fields.
-				if existing, found, err := s.peers.FindBySSHDestination(destination); err == nil && found {
-					peer.Name = existing.Name
-					peer.ID = existing.ID
-					peer.Accent = existing.Accent
-					peer.Glyph = existing.Glyph
-				} else if identity, err := probePeer(r.Context(), session.URL()); err == nil {
+				// Always probe the live identity for a new SSH setup. The
+				// URL is per-session and the record that lands in the
+				// inventory is effectively new each time, so a prior
+				// session's identity fields are not used here. A bug-state
+				// record from before commit e935a76 had empty
+				// name/id/accent/glyph, and copying those forward would
+				// migrate the bug into the new record — so we don't.
+				// preserveFromExisting is a *separate* field-by-field
+				// concern: it leaves the bug-state record's empty fields
+				// alone and only fills the new record from the probe.
+				if identity, err := probePeer(r.Context(), session.URL()); err == nil {
 					peer.Name = identity.Hostname
 					peer.ID = identity.ID
 					peer.Accent = identity.Accent
 					peer.Glyph = identity.Glyph
+				} else {
+					// The probe failed even though /api/healthz just
+					// returned 200: a non-Eta answer on the remote, or a
+					// reply missing identity fields. The status handler
+					// reports the failure on the wire (the next block),
+					// and the inventory gets the URL with no identity,
+					// which is the same broken state an old record was
+					// in — but it is a *fresh* broken state, traceable
+					// to the probe that just failed, not a bug carried
+					// forward.
+					peer.Name = ""
+					peer.ID = ""
+					peer.Accent = ""
+					peer.Glyph = ""
 				}
 				if err := s.peers.UpsertBySSHDestination(peer); err != nil {
 					writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
