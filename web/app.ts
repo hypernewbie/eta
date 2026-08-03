@@ -98,6 +98,10 @@ type Peer = {
   id: string;
   accent: string;
   glyph: string;
+  // Set only for a PC reached by running Eta on it over SSH. It is that
+  // PC's durable identity: url is a forwarded port that differs every
+  // session, so anything that must survive a reconnect keys on this.
+  ssh_destination?: string;
 };
 type Entry = {
   name: string;
@@ -3542,6 +3546,16 @@ $("#desktop-icons").addEventListener("contextmenu", (event) => {
   $("#desktop-context-menu [data-desktop-action='remove-peer']").hidden = !(
     isComputerIcon && model.peer
   );
+  // SSH-backed PCs only: an ordinary peer is something already running
+  // that this instance merely talks to, so there is nothing to connect,
+  // disconnect or uninstall.
+  const sshBacked = Boolean(isComputerIcon && model.peer?.ssh_destination);
+  $("#desktop-context-menu [data-desktop-action='reconnect-pc']").hidden =
+    !sshBacked;
+  $("#desktop-context-menu [data-desktop-action='disconnect-pc']").hidden =
+    !sshBacked;
+  $("#desktop-context-menu [data-desktop-action='cleanup-pc']").hidden =
+    !sshBacked;
   const menu = $("#desktop-context-menu");
   menu.style.left = `${event.clientX}px`;
   menu.style.top = `${event.clientY}px`;
@@ -3572,6 +3586,50 @@ $("#desktop-context-menu").addEventListener("click", async (event) => {
     const peer = desktopIconIndex.get(key)?.peer;
     if (!peer) return;
     await removePeer(peer);
+    return;
+  }
+  if (action.dataset.desktopAction === "reconnect-pc") {
+    const destination = desktopIconIndex.get(key)?.peer?.ssh_destination;
+    if (destination) await reconnectRemotePC(destination);
+    return;
+  }
+  if (action.dataset.desktopAction === "disconnect-pc") {
+    const peer = desktopIconIndex.get(key)?.peer;
+    if (!peer?.ssh_destination) return;
+    try {
+      await api(
+        `/api/remote-pc?destination=${encodeURIComponent(peer.ssh_destination)}`,
+        { method: "DELETE" },
+      );
+      showToast(`Disconnected ${peer.name}`, "success");
+    } catch (error) {
+      showToast((error as Error).message);
+    }
+    return;
+  }
+  if (action.dataset.desktopAction === "cleanup-pc") {
+    const peer = desktopIconIndex.get(key)?.peer;
+    if (!peer?.ssh_destination) return;
+    // Destructive and not undoable from here, so it asks. Named for what
+    // it does on the far side, not "clean up", which sounds like cache.
+    if (
+      !window.confirm(
+        `Delete Eta's files from ${peer.ssh_destination} (~/.eta) and forget this PC?\n\nNothing else on that computer is touched.`,
+      )
+    )
+      return;
+    try {
+      await api("/api/remote-pc/cleanup", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ destination: peer.ssh_destination }),
+      });
+      enrolledPeers = await api("/api/peers");
+      refreshTaskStrip();
+      showToast(`Removed Eta from ${peer.ssh_destination}`, "success");
+    } catch (error) {
+      showToast((error as Error).message);
+    }
     return;
   }
   desktopIconIndex.get(key)?.open();
@@ -3979,6 +4037,36 @@ async function setupPCPoll(destination: string) {
   } finally {
     setupPolling = false;
   }
+}
+
+// Reconnects a PC already in the inventory. This is what "persistence"
+// means for an SSH-backed PC: the entry survives, the connection does
+// not, and opening it again converges rather than resuming. Nothing is
+// left running on that machine between sessions, so this is also the
+// normal path after either computer restarts.
+async function reconnectRemotePC(destination: string) {
+  setupPCReset();
+  ($("#setup-pc-destination") as any).value = destination;
+  ($("#setup-pc-destination") as any).disabled = true;
+  ($("#setup-pc-start") as any).disabled = true;
+  ($("#setup-pc-spinner") as HTMLElement).hidden = false;
+  $("#setup-pc-phase-text").textContent = SETUP_PHASE_TEXT.connecting;
+  $("#setup-pc-progress").hidden = false;
+  ($("#setup-pc-dialog") as any).show();
+  try {
+    await api("/api/remote-pc", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ destination }),
+    });
+  } catch (error) {
+    ($("#setup-pc-spinner") as HTMLElement).hidden = true;
+    $("#setup-pc-phase-text").textContent = (error as Error).message;
+    ($("#setup-pc-destination") as any).disabled = false;
+    ($("#setup-pc-start") as any).disabled = false;
+    return;
+  }
+  await setupPCPoll(destination);
 }
 
 $("#setup-pc-button").addEventListener("click", () => {
