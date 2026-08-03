@@ -358,8 +358,14 @@ func runSSH(ctx context.Context, destination, command string) (string, error) {
 }
 
 // selfModuleVersion pins the remote to this binary's own version. A
-// development build has none, which must be an explicit error rather
-// than falling back to @latest and installing a different eta.
+// development build has no published version of its own to pin against,
+// so it falls back to the latest tagged release. The user is expected
+// to be running a development build because they are working on Eta
+// itself, and the latest released build is the assumed wire-compatible
+// baseline; if the in-progress changes break compatibility with that
+// baseline, the install will succeed but the remote will fail to
+// connect, and the user will see the failure through the normal status
+// poll.
 func selfModuleVersion() (module, version string, err error) {
 	info, ok := debug.ReadBuildInfo()
 	if !ok {
@@ -371,7 +377,7 @@ func selfModuleVersion() (module, version string, err error) {
 		return "", "", errors.New("this build has no module path, so there is no version a remote PC could install")
 	}
 	if version == "" || version == "(devel)" {
-		return "", "", fmt.Errorf("this is a development build of eta (%s), which has no published version a remote PC could install — use a released build to set up a PC over SSH", module)
+		return module, "latest", nil
 	}
 	return module, version, nil
 }

@@ -176,16 +176,33 @@ func TestPOSIXCleanupCommandIsValidShellSyntax(t *testing.T) {
 	}
 }
 
-// TestSelfModuleVersionRefusesADevelopmentBuild: a test binary has no
-// published version — the development-build case — which must error
-// rather than fall back to @latest and install a different eta.
-func TestSelfModuleVersionRefusesADevelopmentBuild(t *testing.T) {
-	_, _, err := selfModuleVersion()
-	if err == nil {
-		t.Skip("this binary reports a real version; the development-build path is not exercised here")
+// TestSelfModuleVersionFallsBackToLatestForADevelopmentBuild: a test
+// binary has no published version, which is the development-build case.
+// The remote install must still go ahead — the user is running a dev
+// build because they are working on Eta itself, and the latest
+// released build is the assumed wire-compatible baseline. The
+// "different eta on the remote" objection that was originally raised
+// against this fallback is now accepted: if the in-progress changes
+// break compatibility, the install succeeds and the remote fails to
+// connect, which the user sees through the normal status poll.
+func TestSelfModuleVersionFallsBackToLatestForADevelopmentBuild(t *testing.T) {
+	module, version, err := selfModuleVersion()
+	if err != nil {
+		t.Fatalf("selfModuleVersion should always return a downloadable, got error: %v", err)
 	}
-	if !strings.Contains(err.Error(), "development build") && !strings.Contains(err.Error(), "no module") {
-		t.Fatalf("expected a clear development-build error, got: %v", err)
+	if module == "" {
+		t.Fatal("expected a module path")
+	}
+	if version == "" || version == "(devel)" {
+		t.Errorf("a development build should fall back to \"latest\", got version %q", version)
+	}
+	// A real release build returns a real version; a dev build returns
+	// "latest". Either is acceptable; the function's only contract is
+	// that the result is something `go install` can fetch.
+	if version == "latest" {
+		t.Logf("running as a development build; remote install will use @latest")
+	} else {
+		t.Logf("running as a release build (%s); remote install pinned to this version", version)
 	}
 }
 
