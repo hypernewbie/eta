@@ -371,18 +371,18 @@ exit 1
 	}
 }
 
-// A Windows PC still on the cmd.exe default is refused with the exact
-// thing to change — a clear error instead of a third code path.
-func TestDetectShellNamesTheRegistryKeyForAnUnsupportedWindowsShell(t *testing.T) {
-	fakeSSH(t, "exit 1\n")
-	_, err := detectShell(context.Background(), "cmdbox")
-	if err == nil {
-		t.Fatal("expected an error when neither shell answered")
+func TestDetectShellIdentifiesCmdExeFallback(t *testing.T) {
+	fakeSSH(t, `case "$*" in
+		*"powershell"*) echo 5 ;;
+		*"uname"*) exit 1 ;;
+		*"Write-Output"*) exit 1 ;;
+	esac`)
+	sh, err := detectShell(context.Background(), "cmdbox")
+	if err != nil {
+		t.Fatal(err)
 	}
-	for _, want := range []string{"DefaultShell", "PowerShell", "cmd.exe"} {
-		if !strings.Contains(err.Error(), want) {
-			t.Errorf("expected the error to mention %q so the user knows what to change, got: %v", want, err)
-		}
+	if sh != shellCmd {
+		t.Fatalf("expected shellCmd, got %v", sh)
 	}
 }
 

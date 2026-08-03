@@ -70,6 +70,7 @@ type shell int
 const (
 	shellPOSIX shell = iota
 	shellPowerShell
+	shellCmd
 )
 
 type Options struct {
@@ -304,6 +305,10 @@ func remoteCommand(sh shell, module, version, accessHash, repoURL string, remote
 		accessSetupPowerShell = `New-Item -ItemType Directory -Force -Path (Join-Path $HOME ".eta") | Out-Null; Set-Content -Path (Join-Path $HOME ".eta\access.json") -Value '{"password_hash":"` + accessHash + `"}' -NoNewline`
 	}
 	switch sh {
+	case shellCmd:
+		psCmd := remoteCommand(shellPowerShell, module, version, accessHash, repoURL, remotePort)
+		escaped := strings.ReplaceAll(psCmd, `"`, `\"`)
+		return `powershell -NoProfile -ExecutionPolicy Bypass -Command "` + escaped + `"`
 	case shellPowerShell:
 		etaCommand := `& (Join-Path $env:GOPATH "bin\eta.exe") --exit-on-stdin-close --ip 127.0.0.1 --port ` + port + ` --root $HOME`
 		if accessHash != "" {
@@ -379,6 +384,11 @@ func remoteCommand(sh shell, module, version, accessHash, repoURL string, remote
 // Not quite everything: Go ≥1.23 writes telemetry outside ~/.eta. That's
 // Go's state, not eta's; left alone.
 func cleanupCommand(sh shell) string {
+	if sh == shellCmd {
+		psCmd := cleanupCommand(shellPowerShell)
+		escaped := strings.ReplaceAll(psCmd, `"`, `\"`)
+		return `powershell -NoProfile -ExecutionPolicy Bypass -Command "` + escaped + `"`
+	}
 	if sh == shellPowerShell {
 		return strings.Join([]string{
 			`$env:GOPATH = Join-Path $HOME ".eta"`,
@@ -394,9 +404,7 @@ func cleanupCommand(sh shell) string {
 }
 
 // detectShell tries `uname -sm` (every POSIX target), then a variable
-// only PowerShell defines. Nothing else is supported: a Windows PC still
-// on the cmd.exe default gets a clear error naming what to change,
-// rather than a third command language and quoting regime.
+// only PowerShell defines, then invoking PowerShell under cmd.exe.
 func detectShell(ctx context.Context, destination string) (shell, error) {
 	ctx, cancel := context.WithTimeout(ctx, detectTimeout)
 	defer cancel()
@@ -407,7 +415,10 @@ func detectShell(ctx context.Context, destination string) (shell, error) {
 	if out, err := runSSH(ctx, destination, `Write-Output $PSVersionTable.PSVersion.Major`); err == nil && strings.TrimSpace(out) != "" {
 		return shellPowerShell, nil
 	}
-	return 0, fmt.Errorf("could not run a command on %s: it answered neither `uname` (Linux/macOS) nor PowerShell. If this is a Windows PC, set its SSH shell to PowerShell — the registry value DefaultShell under HKEY_LOCAL_MACHINE\\SOFTWARE\\OpenSSH — since the Windows default, cmd.exe, is not supported", destination)
+	if out, err := runSSH(ctx, destination, `powershell -NoProfile -ExecutionPolicy Bypass -Command "Write-Output $PSVersionTable.PSVersion.Major"`); err == nil && strings.TrimSpace(out) != "" {
+		return shellCmd, nil
+	}
+	return 0, fmt.Errorf("could not run a command on %s: it answered neither `uname` (Linux/macOS), PowerShell, nor cmd.exe with PowerShell available.", destination)
 }
 
 // runSSH runs one short command and collects its output. Detection only;
