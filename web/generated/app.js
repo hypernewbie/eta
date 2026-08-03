@@ -4183,6 +4183,13 @@ $("#peer-swatches")?.addEventListener("click", (event) => {
     }).catch((error) => {
         showToast(error.message);
     });
+    void api(`/api/remote/identity?peer=${encodeURIComponent(peer.url)}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ accent: name }),
+    }).catch(() => {
+        // Remote identity update is best-effort (e.g. peer may be offline)
+    });
 });
 $("#swatches").innerHTML = Object.entries(COLORS)
     .map(([name, theme]) => `<button class="swatch" style="--swatch:${theme.accent}" data-theme="${name}"><span class="swatch-dot"></span>${name}</button>`)
