@@ -3184,24 +3184,42 @@ async function updateDesktopWidgets() {
     }
     if (now.getSeconds() % 2 === 0) {
         try {
-            const stats = await api("/api/stats/network");
+            const localStats = await api("/api/stats/network").catch(() => null);
+            let totalTxSpeed = localStats?.txSpeedKbs || 0;
+            let totalRxSpeed = localStats?.rxSpeedKbs || 0;
+            let totalClusterBytes = (localStats?.txBytes || 0) + (localStats?.rxBytes || 0);
+            const onlinePeers = enrolledPeers.filter((p) => isPeerOnline(p));
+            for (const peer of onlinePeers) {
+                const peerKey = peer.name || peer.url;
+                const peerStats = await api(`/api/remote/stats/network?peer=${encodeURIComponent(peerKey)}`).catch(() => null);
+                if (peerStats) {
+                    totalTxSpeed += peerStats.txSpeedKbs || 0;
+                    totalRxSpeed += peerStats.rxSpeedKbs || 0;
+                    totalClusterBytes +=
+                        (peerStats.txBytes || 0) + (peerStats.rxBytes || 0);
+                }
+            }
             const txEl = $("#widget-net-tx-speed");
             if (txEl)
-                txEl.textContent = `${(stats.txSpeedKbs || 0).toFixed(1)} KB/s`;
+                txEl.textContent = `${totalTxSpeed.toFixed(1)} KB/s`;
             const rxEl = $("#widget-net-rx-speed");
             if (rxEl)
-                rxEl.textContent = `${(stats.rxSpeedKbs || 0).toFixed(1)} KB/s`;
-            const totalBytes = (stats.txBytes || 0) + (stats.rxBytes || 0);
+                rxEl.textContent = `${totalRxSpeed.toFixed(1)} KB/s`;
             const totalEl = $("#widget-net-total-bytes");
             if (totalEl)
-                totalEl.textContent = `Total: ${bytes(totalBytes)}`;
+                totalEl.textContent = `Total: ${bytes(totalClusterBytes)}`;
             const jobs = await api("/api/transfer-jobs").catch(() => []);
             const activeCount = Array.isArray(jobs)
                 ? jobs.filter((j) => j.status === "running").length
                 : 0;
             const xferEl = $("#widget-net-transfers");
             if (xferEl) {
-                xferEl.textContent = activeCount > 0 ? `${activeCount} Active` : "Idle";
+                xferEl.textContent =
+                    activeCount > 0
+                        ? `${activeCount} Active`
+                        : onlinePeers.length > 0
+                            ? `${onlinePeers.length + 1} PCs`
+                            : "Idle";
             }
         }
         catch {
