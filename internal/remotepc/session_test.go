@@ -387,3 +387,66 @@ func TestAdoptTargetsEtasDefaultPort(t *testing.T) {
 		t.Fatalf("expected eta's documented default port, got %d", defaultRemotePort)
 	}
 }
+
+// A failed install must leave enough state in the manager for a status
+// poll to see what actually went wrong. Before this was fixed, Manager.Connect
+// called m.Disconnect on WaitReady error, the next status poll found the
+// map empty, and the browser rendered "The connection ended" — a useful
+// message in no scenario. The user's real question on a fresh install is
+// usually "is Go installed there?", and that has to survive to the poll.
+//
+// The test exercises the real manager and the real session, against a
+// fake ssh that reports no Go toolchain: the marker reader sets err,
+// the wait goroutine flips phase, the manager keeps the session. Two
+// polls both return the same failed state, which is the regression
+// guard against the disconnect-erasure returning.
+func TestManagerKeepsAFailedInstallVisibleAcrossStatusPolls(t *testing.T) {
+	fakeSSH(t, `case "$*" in
+  *uname*) echo 'Linux x86_64'; exit 0 ;;
+esac
+echo "ETA:fail:no Go toolchain found on this PC (install Go, or make sure it is on the PATH for non-interactive SSH sessions)"
+exit 1
+`)
+
+	manager := NewManager()
+	t.Cleanup(manager.StopAll)
+
+	if _, err := manager.Connect(context.Background(), Options{
+		Destination: "minerva",
+		Module:      "example.com/m",
+		Version:     "v1.0.0",
+	}); err == nil {
+		t.Fatal("expected the install to fail")
+	}
+
+	// Pending is what the status handler actually calls. It must return
+	// the failed session so the handler can read phase, err, and recent.
+	session, ok := manager.Pending("minerva")
+	if !ok {
+		t.Fatal("a failed install must keep its session visible to a status poll, not be disconnected before the next poll lands")
+	}
+	if session.Phase() != PhaseFailed {
+		t.Errorf("phase after a marker-reported failure: got %q, want %q", session.Phase(), PhaseFailed)
+	}
+	if !strings.Contains(session.Err().Error(), "no Go toolchain") {
+		t.Errorf("expected the remote's own reason on the session, got: %v", session.Err())
+	}
+	recent := session.Recent()
+	found := false
+	for _, line := range recent {
+		if strings.Contains(line, "ETA:fail:") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected the ETA:fail line in recent output, got: %v", recent)
+	}
+
+	// Same again, a moment later. This is what catches a regression to
+	// the disconnect-erasure: the first poll sees the session, the
+	// second sees the map emptied by Get's exited-session cleanup.
+	if _, ok := manager.Pending("minerva"); !ok {
+		t.Fatal("the failed session vanished between polls; a status poll is exactly what the user gets")
+	}
+}

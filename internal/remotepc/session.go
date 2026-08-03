@@ -509,8 +509,16 @@ func adopt(ctx context.Context, destination string, remotePort int) (*Session, b
 		waitErr := cmd.Wait()
 		drained.Wait()
 		session.mu.Lock()
-		if session.phase != PhaseReady && session.err == nil {
-			session.err = session.failure(waitErr)
+		if session.phase != PhaseReady {
+			// The phase flip always happens, even when readMarkers has
+			// already set err on an ETA:fail marker. The marker's err
+			// is the user-visible reason; the wait goroutine's role here
+			// is the phase. Splitting the guard is the difference between
+			// the browser seeing "failed" and seeing the session sit at
+			// "checking" until the manager rips it out.
+			if session.err == nil {
+				session.err = session.failure(waitErr)
+			}
 			session.phase = PhaseFailed
 		}
 		session.mu.Unlock()
@@ -614,8 +622,16 @@ func install(ctx context.Context, opts Options) (*Session, error) {
 		waitErr := cmd.Wait()
 		drained.Wait()
 		session.mu.Lock()
-		if session.phase != PhaseReady && session.err == nil {
-			session.err = session.failure(waitErr)
+		if session.phase != PhaseReady {
+			// The phase flip always happens, even when readMarkers has
+			// already set err on an ETA:fail marker. The marker's err
+			// is the user-visible reason; the wait goroutine's role here
+			// is the phase. Splitting the guard is the difference between
+			// the browser seeing "failed" and seeing the session sit at
+			// "checking" until Manager.Connect rips it out.
+			if session.err == nil {
+				session.err = session.failure(waitErr)
+			}
 			session.phase = PhaseFailed
 		}
 		session.mu.Unlock()
@@ -644,6 +660,13 @@ func (s *Session) readMarkers(r io.Reader) {
 		case strings.HasPrefix(line, "ETA:fail:"):
 			s.mu.Lock()
 			s.err = errors.New(strings.TrimPrefix(line, "ETA:fail:"))
+			// The phase flip is part of the marker's job, not the wait
+			// goroutine's: a single line on stdout is the failure, and
+			// the browser's status poll looks at the phase first. Leaving
+			// the phase at "checking" or "installing" until ssh exits
+			// races Manager.Connect's Disconnect, and the user sees
+			// "disconnected" instead of the reason they came for.
+			s.phase = PhaseFailed
 			s.mu.Unlock()
 		}
 	}
@@ -795,7 +818,15 @@ func (m *Manager) Connect(ctx context.Context, opts Options) (*Session, error) {
 			return nil, err
 		}
 		if err := session.WaitReady(ctx); err != nil {
-			m.Disconnect(opts.Destination)
+			// Stop the process — on a timeout it is still running, and
+			// Stop is the only thing that closes its stdin and lets ssh
+			// exit — but keep the session registered in m.sessions. It
+			// is the only place that carries phase, err, and recent, and
+			// a status poll ~50 ms after the POST is exactly what the
+			// browser is doing. Disconnect here would race that poll:
+			// the next poll would find the map empty and report
+			// "disconnected" instead of the actual reason.
+			session.Stop()
 			return nil, err
 		}
 		return session, nil
