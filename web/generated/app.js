@@ -4159,7 +4159,7 @@ $("#settings-peer-cleanup")?.addEventListener("click", async () => {
         }
     }
 });
-$("#peer-swatches")?.addEventListener("click", async (event) => {
+$("#peer-swatches")?.addEventListener("click", (event) => {
     const button = event.target.closest("[data-peer-theme]");
     if (!button)
         return;
@@ -4169,16 +4169,6 @@ $("#peer-swatches")?.addEventListener("click", async (event) => {
         return;
     peer.accent = name;
     renderSettingsForSelectedMachine();
-    try {
-        await api("/api/peers", {
-            method: "PATCH",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ url: peer.url, accent: name }),
-        });
-    }
-    catch (error) {
-        showToast(error.message);
-    }
     for (const item of desktopWindows.values()) {
         if (item.peer && item.peer.url === peer.url) {
             item.peer.accent = name;
@@ -4187,6 +4177,13 @@ $("#peer-swatches")?.addEventListener("click", async (event) => {
     }
     refreshTaskStrip();
     void renderDesktopIcons();
+    void api("/api/peers", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url: peer.url, accent: name }),
+    }).catch((error) => {
+        showToast(error.message);
+    });
 });
 $("#swatches").innerHTML = Object.entries(COLORS)
     .map(([name, theme]) => `<button class="swatch" style="--swatch:${theme.accent}" data-theme="${name}"><span class="swatch-dot"></span>${name}</button>`)
