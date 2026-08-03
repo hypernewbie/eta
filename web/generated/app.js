@@ -3793,7 +3793,6 @@ function createSetupPCWindow(initialDestination = "", position) {
                     const peer = enrolledPeers.find((p) => p.ssh_destination === destination || p.url === status.url);
                     if (peer) {
                         peerConnectionStatus.set(peer.url, "online");
-                        void openExplorerWindow(undefined, peer);
                     }
                     void renderDesktopIcons();
                     showToast(status.adopted

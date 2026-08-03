@@ -4271,7 +4271,6 @@ function createSetupPCWindow(
           );
           if (peer) {
             peerConnectionStatus.set(peer.url, "online");
-            void openExplorerWindow(undefined, peer);
           }
           void renderDesktopIcons();
           showToast(
