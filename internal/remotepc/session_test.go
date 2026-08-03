@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestValidateDestinationRefusesAnOptionLikeValue(t *testing.T) {
@@ -448,5 +449,120 @@ exit 1
 	// second sees the map emptied by Get's exited-session cleanup.
 	if _, ok := manager.Pending("minerva"); !ok {
 		t.Fatal("the failed session vanished between polls; a status poll is exactly what the user gets")
+	}
+}
+
+// A connect attempt that has not produced a session yet — the adopt
+// probe or the detectShell stage is still running — is the second
+// place a status poll used to see "disconnected" while the connection
+// was actually still alive. The manager memoizes the in-progress
+// destinations in m.starting; the status handler answers "connecting"
+// against it. The next attempt clears the memo (the user is trying
+// again, the previous attempt is no longer the question).
+func TestStartingMemoReportsAnAttemptInProgress(t *testing.T) {
+	// A fake ssh that hangs the install command (so Begin keeps a
+	// session registered in the starting state) while still answering
+	// the uname probe for detectShell. The test reads m.starting from
+	// a goroutine racing the install; the cancellable context is what
+	// lets the test return without waiting for the hang.
+	fakeSSH(t, `case "$*" in
+  *uname*) echo 'Linux x86_64'; exit 0 ;;
+esac
+sleep 30
+`)
+	manager := NewManager()
+	t.Cleanup(manager.StopAll)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		_, err := manager.Connect(ctx, Options{
+			Destination: "minerva",
+			Module:      "example.com/m",
+			Version:     "v1.0.0",
+		})
+		done <- err
+	}()
+
+	// The poll-side accessor: what handleRemotePCStatus uses. Must be
+	// true while the attempt is in flight, before any session exists.
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if manager.Starting("minerva") {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if !manager.Starting("minerva") {
+		t.Fatal("a connect attempt that has not produced a session must be observable through Starting; a status poll is exactly what sees this")
+	}
+
+	// LastFailure is the sibling accessor for the pre-session error
+	// case: it must report nothing here, since Begin is still running.
+	if _, failed := manager.LastFailure("minerva"); failed {
+		t.Fatal("a still-running attempt must not yet have a memoized failure")
+	}
+
+	// Cancel tears down the in-flight attempt deterministically; the
+	// goroutine then returns with the cancellation error and the test
+	// exits promptly instead of waiting on the fake ssh's 30s sleep.
+	cancel()
+	<-done
+}
+
+// A Begin-time error (dev-build refusal, detectShell failure, missing
+// ssh on this machine) has no session to put a phase on. The manager
+// memoizes the error so a status poll can still answer with the
+// real reason — the wording is the only thing the install path can
+// say about it, and it used to be discarded. A retry clears the memo
+// because the user is asking a new question.
+func TestLastFailureMemoSurvivesAPreSessionErrorAndClearsOnRetry(t *testing.T) {
+	// Neither uname nor PowerShell answers: detectShell returns the
+	// "could not run a command" error before any session is built.
+	fakeSSH(t, "exit 1\n")
+
+	manager := NewManager()
+
+	_, err := manager.Connect(context.Background(), Options{
+		Destination: "winbox",
+		Module:      "example.com/m",
+		Version:     "v1.0.0",
+	})
+	if err == nil {
+		t.Fatal("expected detectShell to fail")
+	}
+
+	pending, ok := manager.Pending("winbox")
+	if ok {
+		t.Fatal("a pre-session failure must not leave a session in the map")
+	}
+	_ = pending
+
+	memo, failed := manager.LastFailure("winbox")
+	if !failed {
+		t.Fatal("a pre-session failure must be memoized so a status poll can answer with the reason")
+	}
+	if !strings.Contains(memo.Error(), "could not run a command") {
+		t.Errorf("expected detectShell's own wording, got: %v", memo)
+	}
+
+	// A retry against a destination that can answer uname must clear
+	// the memo. The user fixed the shell, or hit retry after they
+	// configured the registry, and the previous error is no longer
+	// what they are asking about.
+	fakeSSH(t, "echo 'Linux x86_64'\nexit 0\n")
+	_, err = manager.Connect(context.Background(), Options{
+		Destination: "winbox",
+		Module:      "example.com/m",
+		Version:     "v1.0.0",
+	})
+	if err == nil {
+		// The retry is expected to fail at the next stage (no Go, no
+		// eta running on 7080), but the memo must already be gone
+		// before that — otherwise the new attempt would carry the
+		// old error.
+	}
+	if _, failed := manager.LastFailure("winbox"); failed {
+		t.Fatal("a retry must clear the memoized failure from the previous attempt")
 	}
 }

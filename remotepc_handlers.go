@@ -53,38 +53,61 @@ func (s *server) handleRemotePCStatus(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "no SSH destination given"})
 		return
 	}
-	session, ok := s.remotePCs.Pending(destination)
-	if !ok {
-		writeJSON(w, http.StatusOK, remotePCStatus{Destination: destination, Phase: "disconnected"})
-		return
-	}
-	status := remotePCStatus{
-		Destination: destination,
-		Phase:       string(session.Phase()),
-		Adopted:     session.Adopted(),
-		Recent:      session.Recent(),
-	}
-	if session.Phase() == remotepc.PhaseReady {
-		status.URL = session.URL()
-		// Recorded only once it actually works, and keyed by destination
-		// rather than URL: the forwarded port changes every reconnect, so
-		// keying on the URL would strand the previous entry pointing at a
-		// closed port. Guarded because an instance can run without a peer
-		// inventory, as every other peer-touching handler here allows.
-		if s.peers != nil {
-			if err := s.peers.UpsertBySSHDestination(peers.Peer{
-				SSHDestination: destination,
-				URL:            session.URL(),
-			}); err != nil {
-				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-				return
+	if session, ok := s.remotePCs.Pending(destination); ok {
+		status := remotePCStatus{
+			Destination: destination,
+			Phase:       string(session.Phase()),
+			Adopted:     session.Adopted(),
+			Recent:      session.Recent(),
+		}
+		if session.Phase() == remotepc.PhaseReady {
+			status.URL = session.URL()
+			// Recorded only once it actually works, and keyed by destination
+			// rather than URL: the forwarded port changes every reconnect, so
+			// keying on the URL would strand the previous entry pointing at a
+			// closed port. Guarded because an instance can run without a peer
+			// inventory, as every other peer-touching handler here allows.
+			if s.peers != nil {
+				if err := s.peers.UpsertBySSHDestination(peers.Peer{
+					SSHDestination: destination,
+					URL:            session.URL(),
+				}); err != nil {
+					writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+					return
+				}
 			}
 		}
+		if err := session.Err(); err != nil {
+			status.Error = err.Error()
+		}
+		writeJSON(w, http.StatusOK, status)
+		return
 	}
-	if err := session.Err(); err != nil {
-		status.Error = err.Error()
+	// No session yet. A connect attempt that is still running — the
+	// adopt-probe and detectShell stages live here, typically 2-30 s —
+	// reports "connecting" rather than "disconnected", so the very
+	// first poll after the POST does not stop polling on a would-be
+	// successful setup.
+	if s.remotePCs.Starting(destination) {
+		writeJSON(w, http.StatusOK, remotePCStatus{
+			Destination: destination,
+			Phase:       string(remotepc.PhaseConnecting),
+		})
+		return
 	}
-	writeJSON(w, http.StatusOK, status)
+	// A Begin-time error (dev-build refusal, detectShell, freeLocalPort,
+	// missing ssh, pipe/Start) is the only state that has nothing on
+	// disk, so it is memoized. The browser renders the reason instead
+	// of guessing at "disconnected".
+	if err, failed := s.remotePCs.LastFailure(destination); failed {
+		writeJSON(w, http.StatusOK, remotePCStatus{
+			Destination: destination,
+			Phase:       string(remotepc.PhaseFailed),
+			Error:       err.Error(),
+		})
+		return
+	}
+	writeJSON(w, http.StatusOK, remotePCStatus{Destination: destination, Phase: "disconnected"})
 }
 
 func (s *server) handleRemotePCDisconnect(w http.ResponseWriter, r *http.Request) {

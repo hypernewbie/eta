@@ -765,12 +765,21 @@ type Manager struct {
 	mu       sync.Mutex
 	sessions map[string]*Session
 	starting map[string]chan struct{}
+	// failed memoizes the last Begin-time error for a destination, so a
+	// status poll that lands before any session exists — the case for
+	// pre-session failures (dev-build refusal, detectShell, missing ssh
+	// on this machine) and for the brief starting window while a
+	// adopt-probe/detectShell is still running — can answer with the
+	// real reason instead of "disconnected". Cleared at the start of
+	// every new attempt.
+	failed map[string]error
 }
 
 func NewManager() *Manager {
 	return &Manager{
 		sessions: map[string]*Session{},
 		starting: map[string]chan struct{}{},
+		failed:   map[string]error{},
 	}
 }
 
@@ -802,6 +811,10 @@ func (m *Manager) Connect(ctx context.Context, opts Options) (*Session, error) {
 		}
 		done := make(chan struct{})
 		m.starting[opts.Destination] = done
+		// A new attempt invalidates any memo from a previous one. The
+		// user clicked Set up again; the last error is not what they
+		// are asking about now.
+		delete(m.failed, opts.Destination)
 		m.mu.Unlock()
 
 		// Registered as soon as the process exists, not once it works, so
@@ -811,6 +824,14 @@ func (m *Manager) Connect(ctx context.Context, opts Options) (*Session, error) {
 		delete(m.starting, opts.Destination)
 		if err == nil {
 			m.sessions[opts.Destination] = session
+			delete(m.failed, opts.Destination)
+		} else {
+			// Begin failed before a session existed: dev-build refusal,
+			// detectShell, freeLocalPort, missing ssh, pipe/Start. A
+			// status poll during or after the failure has nothing else
+			// to report against, so the reason is memoized until the
+			// next attempt or an explicit reset.
+			m.failed[opts.Destination] = err
 		}
 		m.mu.Unlock()
 		close(done)
@@ -858,6 +879,31 @@ func (m *Manager) Pending(destination string) (*Session, bool) {
 	defer m.mu.Unlock()
 	session, ok := m.sessions[destination]
 	return session, ok
+}
+
+// Starting reports whether a connect attempt is in progress for a
+// destination but has not yet produced a session. The status handler
+// answers "connecting" for this case, since a poll that lands a few
+// hundred ms after the POST — before Begin's adopt-probe/detectShell
+// completes — would otherwise see no session and report "disconnected"
+// even though a connection is on its way.
+func (m *Manager) Starting(destination string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	_, ok := m.starting[destination]
+	return ok
+}
+
+// LastFailure returns the memoized Begin-time error for a destination,
+// if one exists. The status handler renders it as a failed setup
+// rather than as a disconnected one, so a user who hit "Go not
+// installed" or "Windows cmd.exe" actually sees that — the wording is
+// the only thing the install path can say, and it used to be lost.
+func (m *Manager) LastFailure(destination string) (error, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	err, ok := m.failed[destination]
+	return err, ok
 }
 
 // Get returns the live session for a destination, if any.
