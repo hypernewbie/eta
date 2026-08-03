@@ -1333,6 +1333,43 @@ sl-button[hidden] {
   width: 14px;
   height: 14px;
 }
+.eta-menu-context {
+  position: fixed;
+  z-index: 20000;
+  min-width: 160px;
+  padding: 4px;
+  border: 1px solid var(--bg-border);
+  border-radius: 6px;
+  background: rgba(18, 18, 22, 0.97);
+  box-shadow: 0 14px 32px rgba(0, 0, 0, 0.48);
+  backdrop-filter: blur(16px);
+}
+.eta-menu-context[hidden] {
+  display: none;
+}
+.eta-menu-context button {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 9px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-primary);
+  font: 11px var(--font-mono);
+  text-align: left;
+}
+.eta-menu-context button[hidden] {
+  display: none;
+}
+.eta-menu-context button:hover {
+  background: var(--accent-wash);
+}
+.eta-menu-context button svg {
+  width: 14px;
+  height: 14px;
+}
 .taskbar {
   position: fixed;
   z-index: 10000;

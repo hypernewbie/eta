@@ -567,6 +567,7 @@ func (s *server) routes() http.Handler {
 	mux.HandleFunc("POST /api/remote-pc/cleanup", s.handleRemotePCCleanup)
 	mux.HandleFunc("GET /api/peers/auth-status", s.handlePeerAuthStatus)
 	mux.HandleFunc("POST /api/peers", s.handlePeerAdd)
+	mux.HandleFunc("PATCH /api/peers", s.handlePeerUpdate)
 	mux.HandleFunc("POST /api/peers/credential", s.handlePeerCredential)
 	mux.HandleFunc("DELETE /api/peers", s.handlePeerDelete)
 	mux.HandleFunc("POST /api/directories", s.handleDirectoryCreate)
@@ -2020,6 +2021,46 @@ func (s *server) handlePeerCredential(w http.ResponseWriter, r *http.Request) {
 	peer, ok := s.authenticateToPeer(w, r, peer, request.Verifier)
 	if !ok {
 		return
+	}
+	if err := s.peers.Update(peer); err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, redactPeer(peer))
+}
+
+func (s *server) handlePeerUpdate(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPatch && r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.peers == nil {
+		writeError(w, errors.New("peer inventory is unavailable"))
+		return
+	}
+	var request struct {
+		URL    string `json:"url"`
+		Accent string `json:"accent,omitempty"`
+		Name   string `json:"name,omitempty"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&request); err != nil {
+		writeError(w, err)
+		return
+	}
+	peer, found, err := s.peers.Find(request.URL)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	if !found {
+		writeError(w, errors.New("unknown peer"))
+		return
+	}
+	if request.Accent != "" {
+		peer.Accent = request.Accent
+	}
+	if request.Name != "" {
+		peer.Name = request.Name
 	}
 	if err := s.peers.Update(peer); err != nil {
 		writeError(w, err)

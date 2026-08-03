@@ -275,6 +275,24 @@
       </div>
     </section>
 
+    <div id="eta-menu-context" class="eta-menu-context" hidden>
+      <button type="button" data-eta-menu-action="open">
+        <i data-lucide="folder-open"></i> Open Explorer
+      </button>
+      <button type="button" data-eta-menu-action="configure">
+        <i data-lucide="settings"></i> Configure…
+      </button>
+      <button type="button" data-eta-menu-action="reconnect-pc" hidden>
+        <i data-lucide="zap"></i> Reconnect over SSH
+      </button>
+      <button type="button" data-eta-menu-action="disconnect-pc" hidden>
+        <i data-lucide="plug"></i> Disconnect SSH
+      </button>
+      <button type="button" data-eta-menu-action="cleanup-pc" hidden>
+        <i data-lucide="trash-2"></i> Uninstall Eta from PC
+      </button>
+    </div>
+
     <div id="file-context-menu" class="file-context-menu" hidden>
       <button type="button" data-file-action="trusted-html" hidden>
         <i data-lucide="external-link"></i> Open HTML trusted
@@ -318,76 +336,114 @@
       ><div class="swatches" id="swatches"></div
     ></sl-dialog>
     <sl-dialog id="settings-dialog" label="Settings" class="settings-dialog">
-      <div class="settings-group-label">Roots</div>
-      <div id="settings-roots-list" class="settings-roots-list"></div>
-      <button type="button" id="settings-root-add" class="settings-root-add">
-        <i data-lucide="folder-plus"></i> Add root…
-      </button>
-      <div class="settings-group-label">Security</div>
-      <div class="settings-access-header">
-        <span class="settings-access-title">Access password</span>
-        <span id="settings-access-dot" class="settings-access-dot"></span>
-        <span id="settings-access-state" class="settings-access-state"
-          >Disabled</span
-        >
-      </div>
-      <p class="settings-access-note">
-        Off by default: anyone on this network reaching this address opens Eta
-        with no login, same as before. Setting a password requires it in this
-        browser and for any other PC that browses through this one.
-      </p>
-      <input
-        type="password"
-        id="settings-access-new"
-        class="settings-access-input"
-        autocomplete="new-password"
-        placeholder="New password"
-      />
-      <input
-        type="password"
-        id="settings-access-confirm"
-        class="settings-access-input"
-        autocomplete="new-password"
-        placeholder="Confirm new password"
-      />
-      <div class="settings-access-hint-row">
-        <span class="settings-access-hint">8+ characters.</span>
-        <span
-          id="settings-access-error"
-          class="settings-access-error"
-          role="alert"
-        ></span>
-      </div>
-      <div class="settings-access-actions">
-        <button
-          type="button"
-          id="settings-access-remove"
-          class="settings-access-remove-link"
-          hidden
-        >
-          · Remove password
-        </button>
-        <sl-button
-          id="settings-access-confirm-remove"
-          variant="danger"
-          size="small"
-          hidden
-          >Confirm remove</sl-button
-        >
-        <sl-button id="settings-access-set" variant="primary" size="small"
-          >Set password</sl-button
-        >
-      </div>
-      <div class="settings-group-label">About</div>
-      <div class="settings-about-row">
-        <span class="settings-about-glyph">η</span>
-        <div class="settings-about-text">
-          <div>eta</div>
-          <div id="settings-version" class="settings-version">v?</div>
+      <div class="settings-machine-header">
+        <div class="settings-group-label" style="margin-bottom: 6px">
+          Target Machine
         </div>
-        <sl-button id="settings-changelog-button" size="small"
-          >What's new</sl-button
-        >
+        <select
+          id="settings-machine-select"
+          class="settings-access-input"
+          style="width: 100%; margin-bottom: 12px"
+        ></select>
+      </div>
+      <div id="settings-local-sections">
+        <div class="settings-group-label">Roots</div>
+        <div id="settings-roots-list" class="settings-roots-list"></div>
+        <button type="button" id="settings-root-add" class="settings-root-add">
+          <i data-lucide="folder-plus"></i> Add root…
+        </button>
+        <div class="settings-group-label">Security</div>
+        <div class="settings-access-header">
+          <span class="settings-access-title">Access password</span>
+          <span id="settings-access-dot" class="settings-access-dot"></span>
+          <span id="settings-access-state" class="settings-access-state"
+            >Disabled</span
+          >
+        </div>
+        <p class="settings-access-note">
+          Off by default: anyone on this network reaching this address opens Eta
+          with no login, same as before. Setting a password requires it in this
+          browser and for any other PC that browses through this one.
+        </p>
+        <input
+          type="password"
+          id="settings-access-new"
+          class="settings-access-input"
+          autocomplete="new-password"
+          placeholder="New password"
+        />
+        <input
+          type="password"
+          id="settings-access-confirm"
+          class="settings-access-input"
+          autocomplete="new-password"
+          placeholder="Confirm new password"
+        />
+        <div class="settings-access-hint-row">
+          <span class="settings-access-hint">8+ characters.</span>
+          <span
+            id="settings-access-error"
+            class="settings-access-error"
+            role="alert"
+          ></span>
+        </div>
+        <div class="settings-access-actions">
+          <button
+            type="button"
+            id="settings-access-remove"
+            class="settings-access-remove-link"
+            hidden
+          >
+            · Remove password
+          </button>
+          <sl-button
+            id="settings-access-confirm-remove"
+            variant="danger"
+            size="small"
+            hidden
+            >Confirm remove</sl-button
+          >
+          <sl-button id="settings-access-set" variant="primary" size="small"
+            >Set password</sl-button
+          >
+        </div>
+        <div class="settings-group-label">About</div>
+        <div class="settings-about-row">
+          <span class="settings-about-glyph">η</span>
+          <div class="settings-about-text">
+            <div>eta</div>
+            <div id="settings-version" class="settings-version">v?</div>
+          </div>
+          <sl-button id="settings-changelog-button" size="small"
+            >What's new</sl-button
+          >
+        </div>
+      </div>
+      <div id="settings-peer-sections" hidden>
+        <div class="settings-group-label">Highlight Color</div>
+        <div
+          class="swatches"
+          id="peer-swatches"
+          style="margin-bottom: 16px"
+        ></div>
+        <div id="settings-peer-ssh-controls" hidden>
+          <div class="settings-group-label">SSH Connection</div>
+          <p id="settings-peer-ssh-dest" class="setup-pc-intro"></p>
+          <div style="display: flex; gap: 8px; margin-top: 8px">
+            <sl-button
+              id="settings-peer-reconnect"
+              variant="primary"
+              size="small"
+              >Reconnect</sl-button
+            >
+            <sl-button id="settings-peer-disconnect" size="small"
+              >Disconnect</sl-button
+            >
+            <sl-button id="settings-peer-cleanup" variant="danger" size="small"
+              >Uninstall Eta</sl-button
+            >
+          </div>
+        </div>
       </div>
       <div slot="footer">
         <sl-button id="settings-close">Close</sl-button>

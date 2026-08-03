@@ -3820,9 +3820,88 @@ $("#eta-menu").addEventListener("click", (event) => {
   );
   if (peer) void openExplorerWindow(undefined, peer);
 });
+
+let etaMenuContextTarget: string | null = null;
+$("#eta-menu-locations").addEventListener("contextmenu", (event) => {
+  const target = (event.target as HTMLElement).closest(
+    "[data-location]",
+  ) as HTMLElement | null;
+  if (!target) return;
+  event.preventDefault();
+  event.stopPropagation();
+  const loc = target.dataset.location || "local";
+  etaMenuContextTarget = loc;
+  const peer =
+    loc === "local" ? null : enrolledPeers.find((p) => p.url === loc);
+  const sshBacked = Boolean(peer?.ssh_destination);
+  $("#eta-menu-context [data-eta-menu-action='reconnect-pc']").hidden =
+    !sshBacked;
+  $("#eta-menu-context [data-eta-menu-action='disconnect-pc']").hidden =
+    !sshBacked;
+  $("#eta-menu-context [data-eta-menu-action='cleanup-pc']").hidden =
+    !sshBacked;
+  const menu = $("#eta-menu-context");
+  menu.style.left = `${event.clientX}px`;
+  menu.style.top = `${event.clientY}px`;
+  menu.hidden = false;
+});
+$("#eta-menu-context").addEventListener("click", async (event) => {
+  const actionEl = (event.target as HTMLElement).closest(
+    "[data-eta-menu-action]",
+  ) as HTMLElement | null;
+  $("#eta-menu-context").hidden = true;
+  if (!actionEl || !etaMenuContextTarget) return;
+  const loc = etaMenuContextTarget;
+  const action = actionEl.dataset.etaMenuAction;
+  const peer =
+    loc === "local" ? null : enrolledPeers.find((p) => p.url === loc);
+
+  if (action === "open") {
+    $("#eta-menu").hidden = true;
+    if (loc === "local") void openExplorerWindow();
+    else if (peer) void openExplorerWindow(undefined, peer);
+  } else if (action === "configure") {
+    $("#eta-menu").hidden = true;
+    void openSettings(loc);
+  } else if (action === "reconnect-pc") {
+    $("#eta-menu").hidden = true;
+    if (peer?.ssh_destination) void reconnectRemotePC(peer.ssh_destination);
+  } else if (action === "disconnect-pc") {
+    $("#eta-menu").hidden = true;
+    if (peer?.ssh_destination) {
+      try {
+        await api(
+          `/api/remote-pc?destination=${encodeURIComponent(peer.ssh_destination)}`,
+          { method: "DELETE" },
+        );
+        showToast(`Disconnected ${peerDisplayName(peer)}`, "success");
+      } catch (err) {
+        showToast((err as Error).message);
+      }
+    }
+  } else if (action === "cleanup-pc") {
+    $("#eta-menu").hidden = true;
+    if (peer?.ssh_destination) {
+      if (confirm(`Uninstall Eta from ${peerDisplayName(peer)}?`)) {
+        try {
+          await api("/api/remote-pc/cleanup", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ destination: peer.ssh_destination }),
+          });
+          showToast(`Uninstalled Eta from ${peerDisplayName(peer)}`, "success");
+        } catch (err) {
+          showToast((err as Error).message);
+        }
+      }
+    }
+  }
+});
 document.addEventListener("pointerdown", (event) => {
   if (!(event.target as HTMLElement).closest("#eta-menu, #eta-launcher"))
     $("#eta-menu").hidden = true;
+  if (!(event.target as HTMLElement).closest("#eta-menu-context"))
+    $("#eta-menu-context").hidden = true;
   if (!(event.target as HTMLElement).closest("#desktop-context-menu"))
     $("#desktop-context-menu").hidden = true;
 });
@@ -4044,7 +4123,9 @@ async function setupPCPoll(destination: string) {
         for (const item of desktopWindows.values()) {
           if (!item.peer) continue;
           const updated = enrolledPeers.find(
-            (peer) => peer.url === item.peer!.url || peer.ssh_destination === item.peer!.ssh_destination,
+            (peer) =>
+              peer.url === item.peer!.url ||
+              peer.ssh_destination === item.peer!.ssh_destination,
           );
           if (updated) item.peer = updated;
         }
@@ -4324,10 +4405,6 @@ $("#settings-access-set").addEventListener("click", async () => {
   button.disabled = true;
   settingsAccessShowError("");
   try {
-    await setAccessPassword(newPassword);
-    (["#settings-access-new", "#settings-access-confirm"] as const).forEach(
-      (id) => (($(id) as HTMLInputElement).value = ""),
-    );
     await refreshSettingsAccessState();
     showToast("Password updated", "success");
   } catch (error) {
@@ -4336,22 +4413,158 @@ $("#settings-access-set").addEventListener("click", async () => {
     button.disabled = false;
   }
 });
-// Two-step Remove: click the link, reveal Confirm, click that. No
-// window.confirm() — the session cookie that is about to be cleared is
-// itself the authorization for the action.
-$("#settings-access-remove").addEventListener("click", () => {
-  $("#settings-access-remove").hidden = true;
-  $("#settings-access-confirm-remove").hidden = false;
-  ($("#settings-access-confirm-remove") as HTMLElement).focus();
+let activeSettingsMachineKey = "local";
+
+function populateSettingsMachineDropdown() {
+  const select = $("#settings-machine-select") as HTMLSelectElement | null;
+  if (!select) return;
+  const localOpt = `<option value="local">LOCAL (${escapeHTML(localHost.hostname.toUpperCase())})</option>`;
+  const peerOpts = enrolledPeers.map(
+    (p) =>
+      `<option value="${escapeHTML(p.url)}">${escapeHTML(peerDisplayName(p).toUpperCase())}</option>`,
+  );
+  select.innerHTML = [localOpt, ...peerOpts].join("");
+  select.value = activeSettingsMachineKey;
+}
+
+function renderSettingsForSelectedMachine() {
+  const isLocal = activeSettingsMachineKey === "local";
+  const localSec = $("#settings-local-sections");
+  const peerSec = $("#settings-peer-sections");
+  if (localSec) localSec.hidden = !isLocal;
+  if (peerSec) peerSec.hidden = isLocal;
+
+  if (!isLocal) {
+    const peer = enrolledPeers.find((p) => p.url === activeSettingsMachineKey);
+    const swatches = $("#peer-swatches");
+    if (swatches && peer) {
+      const currentAccent = peer.accent || "purple";
+      swatches.innerHTML = Object.entries(COLORS)
+        .map(
+          ([name, theme]) =>
+            `<button class="swatch ${name === currentAccent ? "active" : ""}" style="--swatch:${theme.accent}" data-peer-theme="${name}"><span class="swatch-dot"></span>${name}</button>`,
+        )
+        .join("");
+    }
+    const sshCtrl = $("#settings-peer-ssh-controls");
+    const sshDest = $("#settings-peer-ssh-dest");
+    if (sshCtrl && sshDest) {
+      if (peer?.ssh_destination) {
+        sshDest.textContent = `SSH destination: ${peer.ssh_destination}`;
+        sshCtrl.hidden = false;
+      } else {
+        sshCtrl.hidden = true;
+      }
+    }
+  }
+}
+
+async function openSettings(targetMachineKey: string = "local") {
+  activeSettingsMachineKey = targetMachineKey;
+  populateSettingsMachineDropdown();
+  renderSettingsForSelectedMachine();
+  await refreshSettingsAccessState();
+  await refreshSettingsRootsList();
+  if (!settingsVersionLoaded) {
+    settingsVersionLoaded = true;
+    try {
+      const info = await api("/api/version");
+      const short = (info.commit || "").slice(0, 7);
+      $("#settings-version").textContent =
+        info.version && info.version !== "dev"
+          ? `v${info.version}${short ? ` · ${short}` : ""}`
+          : "dev build";
+      $("#settings-version").title =
+        [info.date, info.build_source].filter(Boolean).join(" · ") ||
+        "unknown build";
+    } catch {
+      settingsVersionLoaded = false;
+    }
+  }
+  ($("#settings-dialog") as any).show();
+}
+
+$("#settings-machine-select")?.addEventListener("change", (event) => {
+  activeSettingsMachineKey = (event.target as HTMLSelectElement).value;
+  renderSettingsForSelectedMachine();
 });
-$("#settings-access-confirm-remove").addEventListener("click", async () => {
+
+$("#settings-button").addEventListener(
+  "click",
+  () => void openSettings("local"),
+);
+
+$("#settings-close").addEventListener("click", () =>
+  ($("#settings-dialog") as any).hide(),
+);
+
+$("#settings-peer-reconnect")?.addEventListener("click", () => {
+  const peer = enrolledPeers.find((p) => p.url === activeSettingsMachineKey);
+  if (peer?.ssh_destination) {
+    ($("#settings-dialog") as any).hide();
+    void reconnectRemotePC(peer.ssh_destination);
+  }
+});
+$("#settings-peer-disconnect")?.addEventListener("click", async () => {
+  const peer = enrolledPeers.find((p) => p.url === activeSettingsMachineKey);
+  if (peer?.ssh_destination) {
+    try {
+      await api(
+        `/api/remote-pc?destination=${encodeURIComponent(peer.ssh_destination)}`,
+        { method: "DELETE" },
+      );
+      showToast(`Disconnected ${peerDisplayName(peer)}`, "success");
+      renderSettingsForSelectedMachine();
+    } catch (err) {
+      showToast((err as Error).message);
+    }
+  }
+});
+$("#settings-peer-cleanup")?.addEventListener("click", async () => {
+  const peer = enrolledPeers.find((p) => p.url === activeSettingsMachineKey);
+  if (peer?.ssh_destination) {
+    if (confirm(`Uninstall Eta from ${peerDisplayName(peer)}?`)) {
+      try {
+        await api("/api/remote-pc/cleanup", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ destination: peer.ssh_destination }),
+        });
+        showToast(`Uninstalled Eta from ${peerDisplayName(peer)}`, "success");
+        ($("#settings-dialog") as any).hide();
+      } catch (err) {
+        showToast((err as Error).message);
+      }
+    }
+  }
+});
+$("#peer-swatches")?.addEventListener("click", async (event) => {
+  const button = (event.target as HTMLElement).closest(
+    "[data-peer-theme]",
+  ) as HTMLElement | null;
+  if (!button) return;
+  const name = button.dataset.peerTheme || "purple";
+  const peer = enrolledPeers.find((p) => p.url === activeSettingsMachineKey);
+  if (!peer) return;
+  peer.accent = name;
+  renderSettingsForSelectedMachine();
   try {
-    await clearAccessPassword();
-    await refreshSettingsAccessState();
-    showToast("Password removed", "success");
+    await api("/api/peers", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ url: peer.url, accent: name }),
+    });
   } catch (error) {
     showToast((error as Error).message);
   }
+  for (const item of desktopWindows.values()) {
+    if (item.peer && item.peer.url === peer.url) {
+      item.peer.accent = name;
+      colorWindow(item.window, item.peer);
+    }
+  }
+  refreshTaskStrip();
+  void renderDesktopIcons();
 });
 $("#swatches").innerHTML = Object.entries(COLORS)
   .map(
