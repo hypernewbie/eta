@@ -680,6 +680,7 @@ function refreshTaskStrip() {
     });
     taskStrip.innerHTML = [...windows, ...copies].join("");
     refreshEtaMenu();
+    refreshReconnectAllButtonVisibility();
     void renderDesktopIcons();
     iconify();
 }
@@ -3796,8 +3797,30 @@ function createSetupPCWindow(initialDestination = "", position) {
 async function reconnectRemotePC(destination) {
     createSetupPCWindow(destination);
 }
+function refreshReconnectAllButtonVisibility() {
+    const btn = $("#reconnect-all-button");
+    if (btn)
+        btn.hidden = !enrolledPeers.some((p) => Boolean(p.ssh_destination));
+}
+function reconnectAllRemotePCs() {
+    const sshPeers = enrolledPeers.filter((peer) => Boolean(peer.ssh_destination));
+    if (sshPeers.length === 0) {
+        showToast("No SSH-backed PCs enrolled", "danger");
+        return;
+    }
+    showToast(`Reconnecting ${sshPeers.length} remote PC(s)...`, "success");
+    sshPeers.forEach((peer, index) => {
+        const offset = index * 32;
+        const x = Math.min(window.innerWidth - 600, 100 + offset);
+        const y = Math.min(window.innerHeight - 400, 80 + offset);
+        createSetupPCWindow(peer.ssh_destination, { x, y });
+    });
+}
 $("#setup-pc-button").addEventListener("click", () => {
     createSetupPCWindow();
+});
+$("#reconnect-all-button")?.addEventListener("click", () => {
+    reconnectAllRemotePCs();
 });
 $("#theme-button").addEventListener("click", () => $("#theme-dialog").show());
 // ── Settings dialog: Security (access password) ─────────────────────────
